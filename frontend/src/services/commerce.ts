@@ -11,7 +11,7 @@
  *     the ones the server can produce, and consistent with each other;
  *   - the partner must be one this app knows by key, and its address must be
  *     exactly that partner's search page for the target's own barcode — https,
- *     the registered host and path, the barcode and at most the affiliate tag,
+ *     the registered host and path, the barcode and the partner's affiliate tag,
  *     nothing else;
  *   - the answer must describe the same pack, the same label version and the
  *     same canonical decision the screen already shows, and an alternative
@@ -39,11 +39,13 @@ export type CommerceDecision = 'buy' | 'wait' | 'skip';
 /**
  * The partners this app will open, by the server's registry key. Each is the
  * complete shape of an address: https, one exact host, one exact path, the
- * barcode, and optionally the affiliate tag. A partner the server enables and
+ * barcode, and the affiliate tag in the partner's own shape (Amazon India: a
+ * tracking ID ending ``-21``). V1 has no untagged address: every partner is an
+ * affiliate relationship, disclosed as one. A partner the server enables and
  * this table does not know simply shows no link.
  */
 const DESTINATIONS = {
-  amazon_in: /^https:\/\/www\.amazon\.in\/s\?k=([0-9]{8}|[0-9]{12,14})(?:&tag=[A-Za-z0-9](?:[A-Za-z0-9-]{0,62}[A-Za-z0-9])?)?$/,
+  amazon_in: /^https:\/\/www\.amazon\.in\/s\?k=([0-9]{8}|[0-9]{12,14})&tag=[a-z0-9](?:[a-z0-9-]{0,58}[a-z0-9])?-21$/,
 } as const;
 export type CommercePartnerKey = keyof typeof DESTINATIONS;
 export const COMMERCE_PARTNER_KEYS = Object.keys(DESTINATIONS) as CommercePartnerKey[];
@@ -59,7 +61,8 @@ export interface CommerceHandoff {
   decision: CommerceDecision;
   targetBarcode: string;
   identity: { barcode: string; labelVersion: number; contentFingerprint: string };
-  partner: { key: CommercePartnerKey; url: string; affiliate: boolean };
+  /** Always ``true`` in V1: an untagged or non-affiliate answer is refused. */
+  partner: { key: CommercePartnerKey; url: string; affiliate: true };
 }
 
 /** A GS1 GTIN-8, 12, 13 or 14 with a valid check digit. ASCII digits only. */
@@ -99,10 +102,10 @@ export function parseCommerceHandoff(raw: unknown): CommerceHandoff | null {
   if (!isExactGtin(targetBarcode)) return null;
   // BUY links the scanned pack; WAIT and SKIP never do.
   if (target === 'current_product' ? targetBarcode !== identity.barcode : targetBarcode === identity.barcode) return null;
-  if (typeof partner.affiliate !== 'boolean') return null;
+  // Every V1 partner is an affiliate relationship; an answer claiming otherwise
+  // did not come from a V1 handoff. The address must carry the tag as well.
+  if (partner.affiliate !== true) return null;
   if (!isCommerceDestination(partner.url, partner.key, targetBarcode)) return null;
-  // The address carries a tag exactly when the server says it is an affiliate link.
-  if (partner.url.includes('&tag=') !== partner.affiliate) return null;
   return {
     target: target as CommerceTarget,
     decision: decision as CommerceDecision,
@@ -112,7 +115,7 @@ export function parseCommerceHandoff(raw: unknown): CommerceHandoff | null {
       labelVersion: identity.label_version,
       contentFingerprint: identity.content_fingerprint,
     },
-    partner: { key: partner.key as CommercePartnerKey, url: partner.url, affiliate: partner.affiliate },
+    partner: { key: partner.key as CommercePartnerKey, url: partner.url, affiliate: true },
   };
 }
 
@@ -163,7 +166,7 @@ export interface CommerceOpenEvent {
     target: CommerceTarget;
     decision: CommerceDecision;
     partner: CommercePartnerKey;
-    affiliate: boolean;
+    affiliate: true;
   };
 }
 

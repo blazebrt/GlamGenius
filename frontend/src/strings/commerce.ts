@@ -9,9 +9,12 @@
  * Step 16 file grows its own sentence.
  *
  * Writing rules, on top of the verdict screen's six:
- *   - The disclosure is upfront and travels with the link. It says three
- *     things, every time: this is an affiliate link, GlamGenius may earn a
- *     commission, and that does not affect our decisions.
+ *   - The disclosure is upfront, before the link, and stays after a tap. It
+ *     says three things, every time: this is an affiliate link; the partner's
+ *     own required identification statement, word for word (for Amazon India,
+ *     the Associates statement); and that the relationship does not affect
+ *     GlamGenius decisions. It is keyed by partner because the second part is
+ *     the partner's wording, not ours.
  *   - A link opens a partner's search for one barcode. It is not a listing we
  *     checked, so nothing here says the product was found, is the same, is in
  *     stock, is available, is the best or cheapest, or is sold by a
@@ -22,14 +25,17 @@
  */
 
 /** Bump whenever any sentence below changes. */
-export const COMMERCE_COPY_VERSION = 'commerce-copy.v1';
+export const COMMERCE_COPY_VERSION = 'commerce-copy.v2';
 
 /** Interpolation, the same shape as the verdict strings' `t`. */
 export const fill = (template: string, values: Record<string, string | number> = {}): string =>
   template.replace(/\{(\w+)\}/g, (_, key) => String(values[key] ?? `{${key}}`));
 
 export const COMMERCE = {
-  disclosure: 'Affiliate · GlamGenius may earn a commission. This does not affect our decisions.',
+  /** Keyed by the server's registry key. Amazon's Associate identification is its own required sentence. */
+  disclosure: {
+    amazon_in: 'Affiliate · As an Amazon Associate I earn from qualifying purchases. This does not affect GlamGenius decisions.',
+  },
   action: {
     current_product: 'Find this product',
     alternative: 'Find this alternative',

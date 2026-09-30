@@ -66,17 +66,31 @@ describe('Step 16 — every word is keyed', () => {
   });
 
   it('the copy is versioned', () => {
-    expect(COMMERCE_COPY_VERSION).toBe('commerce-copy.v1');
+    expect(COMMERCE_COPY_VERSION).toBe('commerce-copy.v2');
   });
 });
 
 describe('Step 16 — the disclosure and what the copy never says', () => {
-  it('says all three facts, upfront, in one sentence pair', () => {
-    expect(COMMERCE.disclosure).toBe('Affiliate · GlamGenius may earn a commission. This does not affect our decisions.');
-    expect(COMMERCE.disclosure).toMatch(/^Affiliate\b/);
-    expect(COMMERCE.disclosure).toMatch(/may earn a commission/);
-    expect(COMMERCE.disclosure).toMatch(/does not affect our decisions/);
+  it('says all three facts, upfront, with Amazon\'s own Associate identification', () => {
+    const disclosure = COMMERCE.disclosure.amazon_in;
+    expect(disclosure).toBe('Affiliate · As an Amazon Associate I earn from qualifying purchases. This does not affect GlamGenius decisions.');
+    expect(disclosure).toMatch(/^Affiliate\b/);
+    // Amazon's required sentence, word for word and not reworded.
+    expect(disclosure).toContain('As an Amazon Associate I earn from qualifying purchases.');
+    expect(disclosure).toContain('This does not affect GlamGenius decisions.');
+    expect(disclosure.indexOf('Affiliate')).toBeLessThan(disclosure.indexOf('As an Amazon Associate'));
+    expect(disclosure.indexOf('As an Amazon Associate')).toBeLessThan(disclosure.indexOf('This does not affect GlamGenius decisions.'));
     expect(COMMERCE.a11y.action).toMatch(/Affiliate link\./);
+  });
+
+  it('has a disclosure for every partner the app will open, and no other', () => {
+    expect(Object.keys(COMMERCE.disclosure)).toEqual(COMMERCE_PARTNER_KEYS);
+  });
+
+  it('renders the disclosure from the key file, never from the component', () => {
+    const component = code('src/components/verdict/CommerceHandoff.tsx');
+    expect(component).toContain('COMMERCE.disclosure[handoff.partner.key]');
+    expect(component).not.toMatch(/Amazon Associate|qualifying purchases|earn a commission/);
   });
 
   it('keeps the pack notice verbatim', () => {
@@ -131,7 +145,9 @@ describe('Step 16 — no SDK, no in-app browser, no stored address', () => {
     expect(COMMERCE_PARTNER_KEYS).toEqual(['amazon_in']);
     expect(Object.keys(COMMERCE.partners)).toEqual(COMMERCE_PARTNER_KEYS);
     expect(isCommerceDestination('https://www.amazon.in/s?k=8901058000191&tag=glamgenius-21', 'amazon_in', '8901058000191')).toBe(true);
-    expect(isCommerceDestination('https://www.amazon.in/s?k=8901058000191', 'amazon_in', '8901058000191')).toBe(true);
+    // The tag is required, in Amazon India's shape.
+    expect(isCommerceDestination('https://www.amazon.in/s?k=8901058000191', 'amazon_in', '8901058000191')).toBe(false);
+    expect(isCommerceDestination('https://www.amazon.in/s?k=8901058000191&tag=anything', 'amazon_in', '8901058000191')).toBe(false);
   });
 });
 

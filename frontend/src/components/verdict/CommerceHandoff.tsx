@@ -38,6 +38,7 @@ export function CommerceHandoff({
   const [failed, setFailed] = useState(false);
   const opening = useRef(false);
   const partner = COMMERCE.partners[handoff.partner.key];
+  const disclosure = COMMERCE.disclosure[handoff.partner.key];
   const action = COMMERCE.action[handoff.target];
 
   const onOpen = useCallback(async () => {
@@ -54,7 +55,7 @@ export function CommerceHandoff({
 
   return (
     <View style={styles.container} testID={testID}>
-      <Text style={styles.disclosure}>{COMMERCE.disclosure}</Text>
+      <Text style={styles.disclosure}>{disclosure}</Text>
       <TouchableOpacity
         accessibilityRole="link"
         accessibilityLabel={fill(COMMERCE.a11y.action, { action, partner })}

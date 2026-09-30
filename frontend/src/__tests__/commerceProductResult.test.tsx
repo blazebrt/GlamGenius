@@ -178,7 +178,7 @@ function orderedText(node: unknown = screen.toJSON(), found: string[] = []): str
 }
 
 const COMMERCE_LINES = [
-  COMMERCE.disclosure, COMMERCE.action.current_product, COMMERCE.action.alternative,
+  COMMERCE.disclosure.amazon_in, COMMERCE.action.current_product, COMMERCE.action.alternative,
   'Opens a search for this barcode on Amazon.in. GlamGenius does not check what it lists.',
   COMMERCE.packNotice, COMMERCE.openFailed,
 ];
@@ -196,7 +196,7 @@ describe('Step 16 — a BUY', () => {
     const text = orderedText();
     const decision = text.indexOf('BUY');
     const context = text.indexOf(PURCHASE_OS.context.title);
-    const disclosure = text.indexOf(COMMERCE.disclosure);
+    const disclosure = text.indexOf(COMMERCE.disclosure.amazon_in);
     const action = text.indexOf(COMMERCE.action.current_product);
     expect(decision).toBeGreaterThanOrEqual(0);
     expect(context).toBeGreaterThan(decision);
@@ -205,9 +205,9 @@ describe('Step 16 — a BUY', () => {
     expect(disclosure).toBeGreaterThan(text.indexOf(S.communityObservations.reportAction));
     // Disclosure first, and in the same block as the action.
     expect(action).toBe(disclosure + 1);
-    expect(within(block).getByText(COMMERCE.disclosure)).toBeTruthy();
+    expect(within(block).getByText(COMMERCE.disclosure.amazon_in)).toBeTruthy();
     expect(within(block).getByText(COMMERCE.packNotice)).toBeTruthy();
-    expect(text.filter((line) => line === COMMERCE.disclosure)).toHaveLength(1);
+    expect(text.filter((line) => line === COMMERCE.disclosure.amazon_in)).toHaveLength(1);
     expect(screen.queryByText(COMMERCE.action.alternative)).toBeNull();
     expect(mockReadHandoff).toHaveBeenCalledWith(BARCODE, { physicalPackContext: true });
   });
@@ -218,7 +218,7 @@ describe('Step 16 — a BUY', () => {
     const block = await screen.findByTestId('commerce-current-product');
     await act(async () => { fireEvent.press(within(block).getByRole('link')); });
     expect(open).toHaveBeenLastCalledWith(link(BARCODE));
-    expect(screen.getByText(COMMERCE.disclosure)).toBeTruthy();
+    expect(screen.getByText(COMMERCE.disclosure.amazon_in)).toBeTruthy();
     await waitFor(() => expect(mockPost).toHaveBeenCalledWith(
       '/api/v2/commerce/events',
       expect.objectContaining({
@@ -247,7 +247,7 @@ describe('Step 16 — the official-record ceiling', () => {
     await renderWith(source('buy'), ceiling, handoff());
     await waitFor(() => expect(mockReadHandoff).toHaveBeenCalled());
     expect(screen.queryByTestId('commerce-current-product')).toBeNull();
-    expect(screen.queryByText(COMMERCE.disclosure)).toBeNull();
+    expect(screen.queryByText(COMMERCE.disclosure.amazon_in)).toBeNull();
   });
 });
 
@@ -261,21 +261,21 @@ describe('Step 16 — a WAIT or SKIP', () => {
     const text = orderedText();
     expect(text.filter((line) => line === S.betterOption.heading)).toHaveLength(1);
     // Inside the card: after its heading and the alternative's name.
-    expect(text.indexOf(COMMERCE.disclosure)).toBeGreaterThan(text.indexOf(ALTERNATIVE_NAME));
-    expect(text.indexOf(COMMERCE.disclosure)).toBeGreaterThan(text.indexOf(S.betterOption.heading));
+    expect(text.indexOf(COMMERCE.disclosure.amazon_in)).toBeGreaterThan(text.indexOf(ALTERNATIVE_NAME));
+    expect(text.indexOf(COMMERCE.disclosure.amazon_in)).toBeGreaterThan(text.indexOf(S.betterOption.heading));
   });
 
   it('never links the scanned SKIP product, even when an answer claims it', async () => {
     await renderWith(source('skip'), check('skip'), handoff({ decision: 'skip' }));
     await waitFor(() => expect(mockReadHandoff).toHaveBeenCalled());
-    expect(screen.queryByText(COMMERCE.disclosure)).toBeNull();
+    expect(screen.queryByText(COMMERCE.disclosure.amazon_in)).toBeNull();
   });
 
   it('never links an alternative the card is not showing', async () => {
     const shown = { ...alternative, candidate: { ...alternative.candidate, barcode: '4006381333931' } };
     await renderWith(source('skip', { comparableAlternative: shown }), check('skip'), alternativeHandoff('skip'));
     await waitFor(() => expect(mockReadHandoff).toHaveBeenCalled());
-    expect(screen.queryByText(COMMERCE.disclosure)).toBeNull();
+    expect(screen.queryByText(COMMERCE.disclosure.amazon_in)).toBeNull();
   });
 });
 
@@ -310,7 +310,7 @@ describe('Step 16 — nothing unless everything matches', () => {
     reference.identity = { ...reference.identity, physical_pack_context: false, reference_view: true };
     await renderWith(source('buy', { physicalPackContext: false }), reference, handoff());
     expect(mockReadHandoff).not.toHaveBeenCalled();
-    expect(screen.queryByText(COMMERCE.disclosure)).toBeNull();
+    expect(screen.queryByText(COMMERCE.disclosure.amazon_in)).toBeNull();
   });
 });
 
@@ -324,7 +324,7 @@ describe('Step 16 — the rest of the Product Result is unchanged', () => {
     const without = orderedText();
     off.unmount();
     await renderWith(src(), purchase(), answer());
-    await screen.findByText(COMMERCE.disclosure);
+    await screen.findByText(COMMERCE.disclosure.amazon_in);
     const withLink = orderedText().filter((line) => !COMMERCE_LINES.includes(line));
     expect(withLink).toEqual(without);
   });

@@ -98,9 +98,23 @@ describe('an exact barcode', () => {
 // The address
 // ---------------------------------------------------------------------------
 describe('the address', () => {
-  it('accepts exactly the registry address, with and without the tag', () => {
+  it('accepts exactly the registry address, and only with an Amazon India tag', () => {
     expect(isCommerceDestination(url(BARCODE), 'amazon_in', BARCODE)).toBe(true);
-    expect(isCommerceDestination(url(BARCODE, null), 'amazon_in', BARCODE)).toBe(true);
+    expect(isCommerceDestination(url(BARCODE, 'gg0mobile-21'), 'amazon_in', BARCODE)).toBe(true);
+    // V1 has no untagged Amazon link.
+    expect(isCommerceDestination(url(BARCODE, null), 'amazon_in', BARCODE)).toBe(false);
+  });
+
+  it.each([
+    ['no tag', null],
+    ['another marketplace suffix', 'not-india-20'],
+    ['no suffix', 'random'],
+    ['upper case', 'GlamGenius-21'],
+    ['empty tag', ''],
+    ['a person in the tag', 'glamgenius-21&ref=account-1'],
+  ])('refuses an Amazon address with %s', (_label, tag) => {
+    const address = tag === '' ? `https://www.amazon.in/s?k=${BARCODE}&tag=` : url(BARCODE, tag);
+    expect(isCommerceDestination(address, 'amazon_in', BARCODE)).toBe(false);
   });
 
   it.each([
@@ -177,8 +191,12 @@ describe('the handoff answer', () => {
     ['an address for another barcode', wire({ partner: { key: 'amazon_in', url: url(OTHER), affiliate: true } })],
     ['an address on another host', wire({ partner: { key: 'amazon_in', url: `https://evil.example/s?k=${BARCODE}`, affiliate: true } })],
     ['an unknown partner', wire({ partner: { key: 'shop_x', url: url(BARCODE), affiliate: true } })],
-    ['a tag the server did not disclose', wire({ partner: { key: 'amazon_in', url: url(BARCODE), affiliate: false } })],
-    ['a disclosure without a tag', wire({ partner: { key: 'amazon_in', url: url(BARCODE, null), affiliate: true } })],
+    ['amazon_in with affiliate=false', wire({ partner: { key: 'amazon_in', url: url(BARCODE), affiliate: false } })],
+    ['amazon_in with affiliate=false and no tag', wire({ partner: { key: 'amazon_in', url: url(BARCODE, null), affiliate: false } })],
+    ['amazon_in with no affiliate flag', wire({ partner: { key: 'amazon_in', url: url(BARCODE) } })],
+    ['amazon_in with affiliate="true"', wire({ partner: { key: 'amazon_in', url: url(BARCODE), affiliate: 'true' } })],
+    ['an address without the required tag', wire({ partner: { key: 'amazon_in', url: url(BARCODE, null), affiliate: true } })],
+    ['a non-India tag', wire({ partner: { key: 'amazon_in', url: url(BARCODE, 'glamgenius-20'), affiliate: true } })],
     ['no identity', wire({ identity: null })],
     ['an unusable barcode', wire({ target_barcode: '8901058000192' })],
     ['a list', [wire()]],
@@ -237,12 +255,19 @@ describe('the link on screen', () => {
     render(<CommerceHandoff handoff={buy()} signedIn />);
     const order = texts();
     expect(order).toEqual([
-      COMMERCE.disclosure,
+      'Affiliate · As an Amazon Associate I earn from qualifying purchases. This does not affect GlamGenius decisions.',
       COMMERCE.action.current_product,
       'Opens a search for this barcode on Amazon.in. GlamGenius does not check what it lists.',
       COMMERCE.packNotice,
     ]);
-    expect(COMMERCE.disclosure).toBe('Affiliate · GlamGenius may earn a commission. This does not affect our decisions.');
+    // The three facts, in order: the label, Amazon's own sentence, our independence.
+    const disclosure = order[0];
+    const label = disclosure.indexOf('Affiliate');
+    const associate = disclosure.indexOf('As an Amazon Associate I earn from qualifying purchases.');
+    const independence = disclosure.indexOf('This does not affect GlamGenius decisions.');
+    expect(label).toBe(0);
+    expect(associate).toBeGreaterThan(label);
+    expect(independence).toBeGreaterThan(associate);
   });
 
   it('names the alternative action for an alternative', () => {
@@ -258,7 +283,7 @@ describe('the link on screen', () => {
     await act(async () => { fireEvent.press(screen.getByRole('link')); });
     expect(open).toHaveBeenCalledTimes(1);
     expect(open).toHaveBeenCalledWith(url(BARCODE));
-    expect(screen.getByText(COMMERCE.disclosure)).toBeTruthy();
+    expect(screen.getByText(COMMERCE.disclosure.amazon_in)).toBeTruthy();
     await waitFor(() => expect(mockPost).toHaveBeenCalledTimes(1));
     const [path, body] = mockPost.mock.calls[0];
     expect(path).toBe('/api/v2/commerce/events');
@@ -285,7 +310,7 @@ describe('the link on screen', () => {
     expect(open).not.toHaveBeenCalled();
     expect(mockPost).not.toHaveBeenCalled();
     expect(screen.getByText(COMMERCE.openFailed)).toBeTruthy();
-    expect(screen.getByText(COMMERCE.disclosure)).toBeTruthy();
+    expect(screen.getByText(COMMERCE.disclosure.amazon_in)).toBeTruthy();
   });
 
   it('records nothing when the platform could not open the link', async () => {
@@ -302,13 +327,15 @@ describe('the link on screen', () => {
 // ---------------------------------------------------------------------------
 describe('telemetry', () => {
   it('builds the one event from the validated handoff alone', () => {
-    const event = commerceOpenEvent(parseCommerceHandoff(altWire('skip', {
-      partner: { key: 'amazon_in', url: url(OTHER, null), affiliate: false },
-    }))!);
+    const event = commerceOpenEvent(parseCommerceHandoff(altWire('skip'))!);
     expect(event).toEqual({
       name: 'commerce.outbound_open',
-      properties: { surface: 'product_result', target: 'alternative', decision: 'skip', partner: 'amazon_in', affiliate: false },
+      properties: { surface: 'product_result', target: 'alternative', decision: 'skip', partner: 'amazon_in', affiliate: true },
     });
+    // No Amazon handoff with affiliate=false survives parsing, so none can be recorded.
+    expect(parseCommerceHandoff(altWire('skip', {
+      partner: { key: 'amazon_in', url: url(OTHER), affiliate: false },
+    }))).toBeNull();
   });
 
   it('mints a random version-4 id per open', () => {
@@ -333,6 +360,6 @@ describe('telemetry', () => {
 
 describe('the copy', () => {
   it('is versioned', () => {
-    expect(COMMERCE_COPY_VERSION).toBe('commerce-copy.v1');
+    expect(COMMERCE_COPY_VERSION).toBe('commerce-copy.v2');
   });
 });
