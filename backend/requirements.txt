@@ -15,7 +15,7 @@ google-genai>=1.0.0
 # --- Supabase Auth + Storage (V2) ---
 # pyjwt[crypto] gives us both HS256 and RS256/ES256 verification; the [crypto]
 # extra pulls in the `cryptography` package needed to validate JWKS keys.
-pyjwt[crypto]==2.14.0
+pyjwt[crypto]==2.15.0
 # supabase-py is used server-side with the service-role key for storage,
 # admin invites and account deletion. It never touches the client.
 supabase==2.31.0
