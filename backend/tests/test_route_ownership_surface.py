@@ -36,12 +36,23 @@ from tests.conftest import auth
 pytestmark = pytest.mark.asyncio
 
 
-# By-id routes that may answer a caller with no credentials at all. Empty, and
-# worth keeping that way: every route with an id in its address is addressing
+# By-id routes that may answer a caller with no credentials at all. Keep it as
+# short as it is: every route with an id in its address is addressing
 # somebody's row, even the barcode ones — ``/community/observations/context``
 # reads what *this device* last scanned, so it takes a device token like the
 # rest. An entry here is a deliberate decision that a route is public.
-PUBLIC_BY_ID_ROUTES: frozenset[tuple[str, str]] = frozenset()
+#
+# The one entry (Step 16, independent review round 1, Finding E): the Commerce
+# handoff. While Commerce is off it must answer before reading anything — not
+# even the device token — so a stranger gets the same constant
+# ``unavailable / partner_not_configured`` body as everybody else, and that
+# body names no row. The moment a partner is enabled the route goes through
+# ``current_device`` and refuses a stranger with ``401 DEVICE_UNKNOWN`` like
+# every other device route. ``tests/test_step16_commerce_handoff.py`` proves
+# both halves and pins this set to exactly this entry.
+PUBLIC_BY_ID_ROUTES: frozenset[tuple[str, str]] = frozenset({
+    ("GET", "/api/v2/scan/verdict/{barcode}/commerce-handoff"),
+})
 
 
 def _placeholder(name: str) -> str:

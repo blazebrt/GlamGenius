@@ -49,6 +49,8 @@ import { OfficialRecords } from '../src/components/verdict/OfficialRecords';
 import { ProductWatch } from '../src/components/verdict/ProductWatch';
 import { CommunityObservations } from '../src/components/verdict/CommunityObservations';
 import { BetterOption, REFERENCE_ALTERNATIVE } from '../src/components/verdict/BetterOption';
+import { CommerceHandoff } from '../src/components/verdict/CommerceHandoff';
+import { commerceHandoffMatches, readCommerceHandoff, type CommerceHandoff as CommerceHandoffModel } from '../src/services/commerce';
 import { CommunityReportSheet, BATCH_SCOPED_CODES } from '../src/components/verdict/CommunityReportSheet';
 import { useUserStore } from '../src/store/userStore';
 import {
@@ -196,6 +198,33 @@ export default function VerdictScreen() {
         if (purchaseToken.current === token) setPurchaseCheck(null);
       });
   }, [barcode, referenceView, source, loadState, signedIn, purchaseRefresh]);
+
+  // Step 16. Read only after the purchase check has decided, for the pack in
+  // this person's hand, and dropped unless it matches that pack, that label
+  // version, that canonical decision and the alternative the card shows. The
+  // server alone decides whether a link exists; a failure shows nothing.
+  const [commerce, setCommerce] = useState<CommerceHandoffModel | null>(null);
+  const commerceToken = useRef(0);
+  useEffect(() => {
+    const token = ++commerceToken.current;
+    setCommerce(null);
+    if (referenceView || !barcode || !source || !purchaseCheck || purchaseCheck.decision.state !== 'decided') return;
+    const alternative = source.comparableAlternative;
+    const shown = {
+      barcode,
+      purchaseCheck,
+      alternativeBarcode: alternative?.status === 'available' && alternative.candidate?.productName?.trim()
+        ? alternative.candidate.barcode : null,
+    };
+    void Promise.resolve()
+      .then(() => readCommerceHandoff(barcode))
+      .then((handoff) => {
+        if (commerceToken.current === token) setCommerce(commerceHandoffMatches(handoff, shown) ? handoff : null);
+      })
+      .catch(() => {
+        if (commerceToken.current === token) setCommerce(null);
+      });
+  }, [barcode, referenceView, source, purchaseCheck]);
 
   // One decision stays dominant. The purchase check changes the block only for
   // the governed official-record ceiling; otherwise this is the Product Result.
@@ -520,6 +549,13 @@ export default function VerdictScreen() {
                 <Text style={styles.linkText}>{S.communityObservations.reportAction}</Text>
               </TouchableOpacity>
             )}
+            {/* Step 16. After the decision, its evidence and the purchase
+                context, never above or louder than any of them: one disclosed
+                link for a BUY, only when the server made one available for
+                exactly this pack. */}
+            {commerce?.target === 'current_product' && (
+              <CommerceHandoff handoff={commerce} signedIn={signedIn} testID="commerce-current-product" />
+            )}
             {/* Last of the layers, immediately above the closing actions. It
                 sits below the evidence and below the shopper observations
                 because it is the least of them: a comparison with one other
@@ -528,6 +564,9 @@ export default function VerdictScreen() {
               alternative={source.comparableAlternative}
               onView={openAlternative}
               mrpComparison={source.mrpComparison}
+              handoff={commerce?.target === 'alternative'
+                ? <CommerceHandoff handoff={commerce} signedIn={signedIn} testID="commerce-alternative" />
+                : null}
             />
             {!referenceView && source.labelVersion && memory !== undefined && (
               <ScanDecisionMemorySection

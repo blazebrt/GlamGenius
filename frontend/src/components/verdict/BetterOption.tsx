@@ -13,6 +13,9 @@
  *
  *   - price, MRP, a discount, a cart, a retailer, an affiliate link. Money is a
  *     later milestone with its own provenance, and none of it exists here.
+ *     (Step 16 may attach one disclosed outbound link through the ``handoff``
+ *     slot, rendered by CommerceHandoff with its own keyed copy. The card
+ *     never builds one, never chooses one, and renders the same without it.)
  *   - stars, review counts, shopper observations. A count of people is not a
  *     property of the product, and the selection never read one.
  *   - "recommended for you", or anything else implying this was chosen for the
@@ -48,6 +51,7 @@ export function BetterOption({
   alternative,
   onView,
   mrpComparison,
+  handoff,
 }: {
   alternative: ComparableAlternative | null | undefined;
   onView?: (barcode: string) => void;
@@ -59,6 +63,13 @@ export function BetterOption({
    * afterwards without ever having had a say.
    */
   mrpComparison?: MrpComparisonModel | null;
+  /**
+   * Step 16, rendered inside this card beneath the MRP comparison and only
+   * when the card shows an available alternative: the disclosed link to this
+   * same alternative, already matched to it by the screen. The card is the
+   * same card, in the same place, with or without it.
+   */
+  handoff?: React.ReactNode;
 }) {
   // A response that predates this milestone carries no envelope at all. That is
   // not a missing state to explain to anybody — it is simply nothing to render.
@@ -128,6 +139,7 @@ export function BetterOption({
       {/* Below the product, the comparison and the action: the least of what
           this card says, and the last thing it says. */}
       <MrpComparison value={mrpComparison} />
+      {handoff ?? null}
       {/*
         A licence condition, not a footer. The candidate's name, brand and
         category are Open Food Facts data, and the notice renders with them

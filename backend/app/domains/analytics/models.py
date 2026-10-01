@@ -5,9 +5,11 @@ must never be pruned; analytics is disposable product telemetry with a retention
 policy. Mixing them means either keeping telemetry forever or deleting evidence.
 
 No free-text user content goes in ``properties`` — event names and counts only.
-The only writer is ``app.domains.growth.analytics``, which whitelists every
-event name and every property value, and prunes rows older than its retention
-window. Nothing else may insert here.
+There are exactly two writers, each with its own closed whitelist of event
+names and property values: ``app.domains.growth.analytics`` (Step 15) and
+``app.domains.commerce.analytics`` (Step 16). Rows older than the shared
+retention window are pruned by ``growth.analytics.prune_opportunistically``,
+which both writers run after a successful write. Nothing else may insert here.
 """
 from __future__ import annotations
 

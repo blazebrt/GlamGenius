@@ -761,6 +761,27 @@ export async function readScanPurchaseCheck(
   )).data;
 }
 
+/**
+ * Step 16. Whether this pack's finished decision supports one disclosed
+ * outbound link, under the same device authority as the purchase check.
+ *
+ * Returns the body untouched: ``src/services/commerce.ts`` checks every field,
+ * and the address itself, before anything reaches the screen. Like the
+ * purchase check it uses the device already stored and never registers one.
+ */
+export async function readScanCommerceHandoff(
+  barcode: string,
+  options: { physicalPackContext: boolean },
+): Promise<unknown> {
+  const device = await readStoredDevice();
+  if (!device?.token) return null;
+  const params = options.physicalPackContext ? undefined : { physical_pack_context: 'false' };
+  return (await api.get<unknown>(
+    `/api/v2/scan/verdict/${encodeURIComponent(barcode)}/commerce-handoff`,
+    { headers: { 'X-Device-Token': device.token }, params },
+  )).data;
+}
+
 /** Stop watching. Idempotent, and needs no device. */
 export async function unwatchProduct(barcode: string): Promise<ProductWatchState> {
   return (await api.delete<ProductWatchState>(watchPath(barcode))).data;

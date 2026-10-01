@@ -322,6 +322,10 @@ offer, live price, stock, seller ranking, payment, checkout, order tracking,
 marketplace or retailer API (test AB and the frontend copy test). No
 referrals, invites, social growth loops, campaigns or acquisition analytics.
 
+Step 16 keeps all of this true of the Purchase OS itself. Its disclosed
+outbound link is a separate, downstream layer that reads the finished answer
+and is never read back: see [`COMMERCE_HANDOFF.md`](COMMERCE_HANDOFF.md).
+
 ## 14. Free and paid packaging
 
 Nothing is gated today and no entitlement model is built. For later
@@ -451,3 +455,4 @@ are unchanged. The app treats a missing purchase check as "no section".
 - [`PRODUCT_WATCH_MATERIAL_NOTICES.md`](PRODUCT_WATCH_MATERIAL_NOTICES.md) — the shared record-governance rule.
 - [`SUPPLEMENT_AUTHORITY.md`](SUPPLEMENT_AUTHORITY.md) — the supplement label utility the boundary points to.
 - [`ODBL_DATA_WALL.md`](ODBL_DATA_WALL.md) — Store A / Store B.
+- [`COMMERCE_HANDOFF.md`](COMMERCE_HANDOFF.md) — Step 16, downstream of this contract.
