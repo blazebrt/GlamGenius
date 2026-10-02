@@ -33,11 +33,8 @@ from app.domains.ai_gateway.models import AI_STATUS_SUCCEEDED, VERIFICATION_USER
 from app.domains.alternatives import service as alternatives_service
 from app.domains.community import service as community_service
 from app.domains.media.storage.base import StorageError, StorageMisconfigured
-from app.domains.nutrition.grading import from_scan, grade_product, presentation
-from app.domains.nutrition.grading.production_rules import (
-    enforce_published_required_rules,
-    resolve_production_ruleset,
-)
+from app.domains.nutrition.grading import from_scan
+from app.domains.nutrition.grading.production_rules import resolve_production_ruleset
 from app.domains.official_records import service as official_records_service
 from app.domains.product import (
     change_projection,
@@ -48,6 +45,7 @@ from app.domains.product import (
     pack_context,
     service,
 )
+from app.domains.product import truth as product_truth
 from app.domains.product import watch as product_watch
 from app.domains.product.confidence import ProductConfidence
 from app.domains.product.fssai import find_licence, is_valid_licence
@@ -408,8 +406,11 @@ async def read_product_verdict(
     # lifecycle. Every row then states its own footing, so a number resting on
     # an unreviewed constant is never shown as though a reviewer stood behind it.
     ruleset = await resolve_production_ruleset(session)
-    result = enforce_published_required_rules(grade_product(product), ruleset)
-    payload = presentation.present(product, result, ruleset)
+    # Product Truth: grade, publication boundary, presentation — one shared
+    # authority, so the B2B API (Step 17) cannot grade by a different path.
+    # The device never enters it; pack authority is layered on below.
+    graded = product_truth.grade(product, ruleset)
+    result, payload = graded.result, graded.payload
     # Identity is factual scan context, not a name inferred by the client.
     # Keep absent catalogue values absent instead of manufacturing a brand.
     payload["barcode"] = barcode
