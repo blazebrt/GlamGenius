@@ -363,8 +363,14 @@ test("existing image-size dependency-path contract remains strict", () => {
 // governing and both shipped registries are empty. The registry rules have to
 // admit that state without admitting anything else.
 
-test("the shipped registries are empty and still validate", () => {
-  assert.deepEqual(validateRegistry(shippedExceptionRegistry), []);
+test("the shipped registries validate and govern only the node-forge advisory", () => {
+  // October 2026: GHSA-86w9-cpqp-85rv (node-forge, no patched release) is the
+  // one governed advisory; see the section at the end of this file. When it
+  // is remediated the exception registry returns to empty, and this test with it.
+  assert.deepEqual(
+    validateRegistry(shippedExceptionRegistry).map((exception) => exception.advisory_id),
+    ["GHSA-86w9-cpqp-85rv"],
+  );
   assert.deepEqual(validateFalsePositiveRegistry(shippedFalsePositiveRegistry), []);
 });
 
@@ -707,5 +713,308 @@ test("a carried governed finding with a zero-count summary is still governed nor
   assert.deepEqual(
     result.acceptedExceptions.map((e) => e.advisory_id),
     [approved.advisory_id],
+  );
+});
+
+// ---- GHSA-86w9-cpqp-85rv: the governed node-forge exception -----------------
+//
+// node-forge 1.4.0 (CVE-2026-85393, HIGH) has no patched release. It is
+// accepted as a temporary exception -- a real vulnerability, not a scanner
+// false positive -- because it is reachable only inside Expo CLI build tooling.
+// These tests run against the registries the gate actually reads, and pin
+// that the shipped record accepts exactly the real finding and nothing next to
+// it. Delete this section together with the exception once it is remediated.
+
+const NODE_FORGE = {
+  advisoryId: "GHSA-86w9-cpqp-85rv",
+  cve: "CVE-2026-85393",
+  packageName: "node-forge",
+  version: "1.4.0",
+  severity: "high",
+  paths: [
+    "expo>@expo/cli>node-forge",
+    "expo>@expo/cli>@expo/code-signing-certificates>node-forge",
+  ],
+};
+const NODE_FORGE_DAY = "2026-10-02";
+
+function shippedNodeForgeException() {
+  return shippedExceptionRegistry.exceptions.find(
+    (exception) => exception.advisory_id === NODE_FORGE.advisoryId,
+  );
+}
+
+// Yarn Classic writes one auditAdvisory per resolution path, and each record's
+// findings list every vulnerable path for that version. The real CI stream has
+// exactly this shape: two HIGH records followed by the summary.
+function nodeForgeAudit(overrides = {}) {
+  const finding = { ...NODE_FORGE, ...overrides };
+  return finding.paths.map((resolutionPath) => JSON.stringify({
+    type: "auditAdvisory",
+    data: {
+      resolution: { id: 1240912, path: resolutionPath, dev: false, optional: false, bundled: false },
+      advisory: {
+        cves: [finding.cve],
+        findings: [{ version: finding.version, paths: finding.paths }],
+        github_advisory_id: finding.advisoryId,
+        module_name: finding.packageName,
+        severity: finding.severity,
+      },
+    },
+  })).join("\n");
+}
+
+function completedNodeForgeAudit(overrides = {}) {
+  const severity = overrides.severity || NODE_FORGE.severity;
+  const paths = overrides.paths || NODE_FORGE.paths;
+  return `${nodeForgeAudit(overrides)}\n${cleanAudit({ low: 1, moderate: 37, [severity]: paths.length })}`;
+}
+
+function shippedRegistryWith(mutate) {
+  const copy = JSON.parse(JSON.stringify(shippedExceptionRegistry));
+  mutate(copy.exceptions.find((exception) => exception.advisory_id === NODE_FORGE.advisoryId), copy);
+  return copy;
+}
+
+test("node-forge: the shipped record is exactly the CI finding, with the proven reachability", () => {
+  const exception = shippedNodeForgeException();
+  assert.ok(exception, "the shipped registry must govern GHSA-86w9-cpqp-85rv");
+  assert.equal(shippedExceptionRegistry.exceptions.length, 1);
+  assert.equal(exception.cve, NODE_FORGE.cve);
+  assert.equal(exception.package, NODE_FORGE.packageName);
+  assert.equal(exception.installed_version, NODE_FORGE.version);
+  assert.equal(exception.severity, NODE_FORGE.severity);
+  assert.deepEqual(exception.dependency_paths, NODE_FORGE.paths);
+  assert.equal(exception.production_runtime_reachable, false);
+  assert.equal(exception.production_user_input_reachable, false);
+  assert.equal(exception.build_ci_reachable, true);
+  // Short-lived by construction: review in 7 days, expiry in 14.
+  assert.deepEqual(
+    [exception.created_date, exception.review_date, exception.expiry_date],
+    ["2026-10-02", "2026-10-09", "2026-10-16"],
+  );
+  assert.match(exception.upstream_tracking, /digitalbazaar\/forge#1152/);
+  assert.match(exception.reason, /not a scanner false positive/);
+  for (const statement of [
+    "not imported by GlamGenius application source",
+    "not bundled into the shipped Android application JS or the shipped web application JS",
+    "GlamGenius does not install expo-updates",
+    "No production or user-controlled certificate, RSA public key or signature reaches the affected verifier",
+  ]) {
+    assert.ok(exception.reachability_assessment.includes(statement), `assessment must state: ${statement}`);
+  }
+  // It is governed as an accepted exception, never as a false positive.
+  assert.equal(shippedFalsePositiveRegistry.false_positives.length, 0);
+});
+
+test("node-forge: the exact real finding is accepted only as a visible temporary exception", () => {
+  const result = rawValidateAuditText(
+    completedNodeForgeAudit(),
+    shippedExceptionRegistry,
+    shippedFalsePositiveRegistry,
+    { today: NODE_FORGE_DAY },
+  );
+  assert.deepEqual(result.acceptedExceptions.map((exception) => exception.advisory_id), [NODE_FORGE.advisoryId]);
+  assert.equal(result.falsePositiveFindings.length, 0);
+  assert.equal(result.findings.length, 1);
+  assert.deepEqual([...result.findings[0].paths].sort(), [...NODE_FORGE.paths].sort());
+  assert.deepEqual(result.reviewWarnings, []);
+  const formatted = formatPass(result);
+  assert.match(formatted, /^Node security gate PASS$/m);
+  assert.match(formatted, /^Unaccepted HIGH: 0$/m);
+  assert.match(formatted, /^Unaccepted CRITICAL: 0$/m);
+  assert.match(formatted, /^Accepted temporary exceptions: 1$/m);
+  assert.match(formatted, /^Known scanner false positives: 0$/m);
+  assert.match(formatted, /^GHSA-86w9-cpqp-85rv$/m);
+  assert.match(formatted, /^node-forge@1\.4\.0$/m);
+  assert.match(formatted, /^expires 2026-10-16$/m);
+});
+
+test("node-forge 1: same package with a different advisory fails", () => {
+  assert.throws(
+    () => rawValidateAuditText(
+      completedNodeForgeAudit({ advisoryId: "GHSA-0000-node-forge-other", cve: "CVE-2099-0101" }),
+      shippedExceptionRegistry, shippedFalsePositiveRegistry, { today: NODE_FORGE_DAY },
+    ),
+    /Unaccepted HIGH advisory GHSA-0000-node-forge-other for node-forge \(1\.4\.0\)/,
+  );
+});
+
+test("node-forge 2: same advisory against a different package fails", () => {
+  assert.throws(
+    () => rawValidateAuditText(
+      completedNodeForgeAudit({ packageName: "node-forge-fork" }),
+      shippedExceptionRegistry, shippedFalsePositiveRegistry, { today: NODE_FORGE_DAY },
+    ),
+    /Unaccepted HIGH advisory GHSA-86w9-cpqp-85rv for node-forge-fork/,
+  );
+});
+
+test("node-forge 3: same advisory with a different installed version fails", () => {
+  for (const version of ["1.3.3", "1.4.1"]) {
+    assert.throws(
+      () => rawValidateAuditText(
+        completedNodeForgeAudit({ version }),
+        shippedExceptionRegistry, shippedFalsePositiveRegistry, { today: NODE_FORGE_DAY },
+      ),
+      new RegExp(`does not match installed version\\(s\\): ${version.replace(/\./g, "\\.")}`),
+    );
+  }
+  // A second copy at another version beside 1.4.0 is drift too.
+  const mixed = `${nodeForgeAudit()}\n${nodeForgeAudit({ version: "1.3.3" })}\n${cleanAudit({ high: 4 })}`;
+  assert.throws(
+    () => rawValidateAuditText(mixed, shippedExceptionRegistry, shippedFalsePositiveRegistry, { today: NODE_FORGE_DAY }),
+    /does not match installed version/,
+  );
+});
+
+test("node-forge 4: an additional dependency path fails", () => {
+  const paths = [...NODE_FORGE.paths, "expo>@expo/cli>@expo/devcert>node-forge"];
+  assert.throws(
+    () => rawValidateAuditText(
+      completedNodeForgeAudit({ paths }),
+      shippedExceptionRegistry, shippedFalsePositiveRegistry, { today: NODE_FORGE_DAY },
+    ),
+    /does not allow dependency path expo>@expo\/cli>@expo\/devcert>node-forge/,
+  );
+  // A path reaching node-forge from the application itself is refused the same way.
+  assert.throws(
+    () => rawValidateAuditText(
+      completedNodeForgeAudit({ paths: ["node-forge"] }),
+      shippedExceptionRegistry, shippedFalsePositiveRegistry, { today: NODE_FORGE_DAY },
+    ),
+    /does not allow dependency path node-forge/,
+  );
+});
+
+test("node-forge 5: the same advisory reported as CRITICAL fails", () => {
+  assert.throws(
+    () => rawValidateAuditText(
+      completedNodeForgeAudit({ severity: "critical" }),
+      shippedExceptionRegistry, shippedFalsePositiveRegistry, { today: NODE_FORGE_DAY },
+    ),
+    /Unaccepted CRITICAL advisory GHSA-86w9-cpqp-85rv for node-forge/,
+  );
+});
+
+test("node-forge: a substituted CVE fails", () => {
+  assert.throws(
+    () => rawValidateAuditText(
+      completedNodeForgeAudit({ cve: "CVE-2026-33894" }),
+      shippedExceptionRegistry, shippedFalsePositiveRegistry, { today: NODE_FORGE_DAY },
+    ),
+    /does not match reported CVE/,
+  );
+});
+
+test("node-forge 6: the exception warns from review_date and fails from expiry_date", () => {
+  const review = rawValidateAuditText(
+    completedNodeForgeAudit(),
+    shippedExceptionRegistry, shippedFalsePositiveRegistry, { today: "2026-10-09" },
+  );
+  assert.deepEqual(review.reviewWarnings, [
+    "SECURITY EXCEPTION REVIEW DUE: GHSA-86w9-cpqp-85rv review_date=2026-10-09 expiry_date=2026-10-16",
+  ]);
+  assert.match(formatPass(review), /SECURITY EXCEPTION REVIEW DUE: GHSA-86w9-cpqp-85rv/);
+  for (const today of ["2026-10-16", "2026-10-17", "2027-01-01"]) {
+    assert.throws(
+      () => rawValidateAuditText(
+        completedNodeForgeAudit(),
+        shippedExceptionRegistry, shippedFalsePositiveRegistry, { today },
+      ),
+      /Security exception GHSA-86w9-cpqp-85rv expired on 2026-10-16/,
+    );
+  }
+});
+
+test("node-forge 7: an exception missing any reachability field fails", () => {
+  for (const field of [
+    "reachability_assessment",
+    "production_runtime_reachable",
+    "production_user_input_reachable",
+    "build_ci_reachable",
+    "compensating_controls",
+    "upstream_tracking",
+    "removal_condition",
+  ]) {
+    const incomplete = shippedRegistryWith((exception) => { delete exception[field]; });
+    assert.throws(() => validateRegistry(incomplete), new RegExp(`missing required field ${field}`));
+    assert.throws(
+      () => rawValidateAuditText(completedNodeForgeAudit(), incomplete, shippedFalsePositiveRegistry, { today: NODE_FORGE_DAY }),
+      new RegExp(`missing required field ${field}`),
+    );
+  }
+  for (const field of ["production_runtime_reachable", "production_user_input_reachable", "build_ci_reachable"]) {
+    const stringly = shippedRegistryWith((exception) => { exception[field] = "false"; });
+    assert.throws(() => validateRegistry(stringly), new RegExp(`${field} must be boolean`));
+  }
+  const blank = shippedRegistryWith((exception) => { exception.reachability_assessment = ""; });
+  assert.throws(() => validateRegistry(blank), /reachability_assessment must be non-empty/);
+});
+
+test("node-forge 8: recording it in the false-positive registry instead fails", () => {
+  const exception = shippedNodeForgeException();
+  const asFalsePositive = {
+    schema_version: 1,
+    false_positives: [{
+      advisory_id: exception.advisory_id,
+      cve: exception.cve,
+      package: exception.package,
+      installed_version: exception.installed_version,
+      severity: exception.severity,
+      dependency_paths: exception.dependency_paths,
+      authoritative_affected_range: "<= 1.4.0",
+      authoritative_patched_version: "1.4.1",
+      reason: "Misfiled as a false positive.",
+      authoritative_source: "https://github.com/advisories/GHSA-86w9-cpqp-85rv",
+      owner: exception.owner,
+      created_date: exception.created_date,
+      review_date: exception.review_date,
+      expiry_date: exception.expiry_date,
+      removal_condition: exception.removal_condition,
+    }],
+  };
+  assert.throws(() => validateFalsePositiveRegistry(asFalsePositive), /frozen Nano ID identity contract/);
+  assert.throws(
+    () => rawValidateAuditText(
+      completedNodeForgeAudit(),
+      { schema_version: 1, exceptions: [] }, asFalsePositive, { today: NODE_FORGE_DAY },
+    ),
+    /frozen Nano ID identity contract/,
+  );
+});
+
+test("node-forge 9: an incomplete audit stream fails even though the finding is governed", () => {
+  // No summary at all: the scan never proved it finished.
+  assert.throws(
+    () => rawValidateAuditText(nodeForgeAudit(), shippedExceptionRegistry, shippedFalsePositiveRegistry, { today: NODE_FORGE_DAY }),
+    /no auditSummary: the scan did not run to completion/,
+  );
+  // A summary that is not the last record.
+  assert.throws(
+    () => rawValidateAuditText(
+      `${cleanAudit({ high: 2 })}\n${nodeForgeAudit()}`,
+      shippedExceptionRegistry, shippedFalsePositiveRegistry, { today: NODE_FORGE_DAY },
+    ),
+    /continues after its auditSummary/,
+  );
+  // A summary claiming a CRITICAL that the stream never names.
+  assert.throws(
+    () => rawValidateAuditText(
+      `${nodeForgeAudit()}\n${cleanAudit({ high: 2, critical: 1 })}`,
+      shippedExceptionRegistry, shippedFalsePositiveRegistry, { today: NODE_FORGE_DAY },
+    ),
+    /reports 1 CRITICAL vulnerability\/ies but the stream carries no CRITICAL advisory record/,
+  );
+});
+
+test("node-forge 10: removing the registry entry while the vulnerable audit remains fails", () => {
+  const removed = shippedRegistryWith((exception, copy) => {
+    copy.exceptions = copy.exceptions.filter((candidate) => candidate !== exception);
+  });
+  assert.deepEqual(validateRegistry(removed), []);
+  assert.throws(
+    () => rawValidateAuditText(completedNodeForgeAudit(), removed, shippedFalsePositiveRegistry, { today: NODE_FORGE_DAY }),
+    /Unaccepted HIGH advisory GHSA-86w9-cpqp-85rv for node-forge \(1\.4\.0\)/,
   );
 });

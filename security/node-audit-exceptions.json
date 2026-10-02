@@ -1,4 +1,38 @@
 {
   "schema_version": 1,
-  "exceptions": []
+  "exceptions": [
+    {
+      "advisory_id": "GHSA-86w9-cpqp-85rv",
+      "cve": "CVE-2026-85393",
+      "package": "node-forge",
+      "installed_version": "1.4.0",
+      "severity": "high",
+      "dependency_paths": [
+        "expo>@expo/cli>node-forge",
+        "expo>@expo/cli>@expo/code-signing-certificates>node-forge"
+      ],
+      "reason": "Real vulnerability, accepted temporarily; not a scanner false positive. node-forge through 1.4.0 accepts extra nested DigestAlgorithm elements during RSA PKCS#1 v1.5 signature verification. No official patched release exists: on 2026-10-02 npm latest is 1.4.0, the advisory lists no patched version, and the upstream fix is unmerged. Found by post-merge push CI run 863 on main 3d2e49e1; the same node-forge 1.4.0 resolution was already in both lockfiles on 261b157c, before Step 17.",
+      "reachability_assessment": "node-forge 1.4.0 is installed only beneath Expo CLI build tooling (expo > @expo/cli, directly and through @expo/code-signing-certificates). It is not imported by GlamGenius application source. It is not bundled into the shipped Android application JS or the shipped web application JS: source maps for the CI export commands list no node-forge or @expo/code-signing-certificates module, and the CI-exact bundles contain none of their identifying code. Neither package was loaded by any Node process during the CI Android or web export. The production server images are Python-only and exclude frontend/ and node_modules/. The affected verifier is reached only from the expo start development-server manifest-signing path, and there it checks the project's own updates.codeSigningCertificate file or a signature Expo CLI has just produced itself, never a third-party signature. GlamGenius does not install expo-updates, configures no updates, codeSigningCertificate, codeSigningMetadata or EAS projectId, and CI never runs expo start. No production or user-controlled certificate, RSA public key or signature reaches the affected verifier in the current build architecture. production_runtime_reachable=false and production_user_input_reachable=false. build_ci_reachable=true means only that the package is installed and resolvable in the CI build toolchain; the vulnerable verification is not fed attacker-controlled material there.",
+      "production_runtime_reachable": false,
+      "production_user_input_reachable": false,
+      "build_ci_reachable": true,
+      "compensating_controls": [
+        "node-forge and @expo/code-signing-certificates are absent from the production Android bundle produced by npx expo export --platform android (source-map module list and identifier scan of the CI-exact bundle).",
+        "node-forge and @expo/code-signing-certificates are absent from the production web bundle produced by npx expo export --platform web (source-map module list and identifier scan of the CI-exact bundle).",
+        "GlamGenius application source does not import node-forge, forge or @expo/code-signing-certificates.",
+        "No expo-updates dependency and no updates, codeSigningCertificate, codeSigningMetadata or EAS projectId in the resolved Expo config; CI never runs expo start, so the affected signing and verification path is not invoked.",
+        "The production server images copy only the Python backend; frontend/ and node_modules/ are excluded by .dockerignore.",
+        "Dependency versions are frozen by the committed yarn.lock and package-lock.json; CI installs with yarn install --frozen-lockfile.",
+        "CI runs the Yarn audit and this validator on every push to main, in the weekly scheduled run, and on every PR that changes dependencies or the audit gate.",
+        "The exception is scoped to exactly this advisory, CVE, package, installed version, HIGH severity and these two dependency paths. CI fails if the advisory, CVE, package, version or severity changes, if it is reported as CRITICAL, or if any other dependency path appears.",
+        "Expiry is enforced automatically: the validator fails the build on and after expiry_date and prints a review-due warning from review_date."
+      ],
+      "owner": "@blazebrt",
+      "created_date": "2026-10-02",
+      "review_date": "2026-10-09",
+      "expiry_date": "2026-10-16",
+      "removal_condition": "Remove immediately when any of these occurs: (1) Digital Bazaar publishes a fixed node-forge release covering CVE-2026-85393; (2) Expo removes or replaces the vulnerable dependency; (3) GlamGenius upgrades to an Expo dependency tree without the vulnerable package; (4) GlamGenius adopts Expo Updates or code signing, or any other path that makes the affected verifier production- or user-input reachable; (5) any reachability assumption above changes; (6) the exception reaches expiry_date. Never auto-extend: renewal needs a fresh reachability review.",
+      "upstream_tracking": "Advisory GHSA-86w9-cpqp-85rv / CVE-2026-85393 (https://github.com/advisories/GHSA-86w9-cpqp-85rv; no patched version listed, last updated 2026-10-01). Upstream fix digitalbazaar/forge#1152 (https://github.com/digitalbazaar/forge/pull/1152), 'Fix RSA PKCS#1 v1.5 forgery via nested DigestAlgorithm garbage': open and unmerged on 2026-10-02 (head ceba3440, not in forge main 72324041). Upstream issue digitalbazaar/forge#1149. Re-check npm node-forge releases at every review."
+    }
+  ]
 }
