@@ -96,7 +96,7 @@ type StorageModule = typeof import('../services/secureSessionStorage');
 
 const DEVICE_KEY = 'glamgenius_scan_device_v1';
 const RECOVERY_KEY = 'glamgenius_scan_device_recovery_v1';
-const LEGACY = { device_key: '0123456789abcdef0123456789abcdef', token: 'legacy-token' };
+const LEGACY = { device_key: '__TEST_LEGACY_DEVICE_KEY__', token: '__TEST_LEGACY_DEVICE_TOKEN__' };
 
 /** A phone closed and opened again: fresh modules, the same storage. */
 function launch(): ScanModule {
