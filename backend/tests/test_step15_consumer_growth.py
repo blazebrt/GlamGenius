@@ -44,7 +44,7 @@ from app.shared.database import sql
 from app.shared.database.sql import get_sessionmaker
 from sqlalchemy import func, select, text, update
 
-from tests.conftest import alembic_head_revision, auth
+from tests.conftest import alembic_head_revision, alembic_revision_chain, auth
 
 BACKEND = Path(__file__).resolve().parents[1]
 GROWTH_DIR = BACKEND / "app" / "domains" / "growth"
@@ -1766,7 +1766,10 @@ def test_g_growth_does_not_import_decision_authorities():
 
 
 def test_g_one_step15_migration_from_the_lane_f_head():
-    assert alembic_head_revision() == "l0m1n2o3p4"
+    # Step 17 put its own revision on top; Step 15's stays in the one linear
+    # chain, read from disk rather than pinned as whatever the head is today.
+    assert "l0m1n2o3p4" in alembic_revision_chain()
+    assert alembic_head_revision() == alembic_revision_chain()[0]
     source = (BACKEND / "migrations" / "versions" / "l0m1n2o3p4_step15_consumer_growth.py").read_text()
     assert 'down_revision = "lf1a2b3c4d"' in source
     assert "k9l0m1n2o3" not in source.split("down_revision", 1)[1].splitlines()[0]

@@ -340,6 +340,7 @@ async def test_unknown_confirmed_pack_facts_feed_the_real_grader_without_off_cop
     db_clean, off_clean, app_client, device, monkeypatch, registered_supabase_user,
 ):
     from app.api.v2 import product as product_api
+
     # Step 17: the route reaches the grader through the shared Product Truth
     # authority, so that is where the real grader is intercepted.
     from app.domains.product import truth as product_truth

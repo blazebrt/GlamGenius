@@ -141,7 +141,7 @@ def _golden() -> dict[str, Any]:
 
 
 async def test_the_consumer_product_result_is_unchanged_under_a_published_ruleset(
-    app_client, db_clean, off_clean, published_rules, no_off_network, registered_supabase_user,
+    app_client, db_clean, off_clean, published_rules, no_off_network, registered_supabase_user,  # noqa: F811
 ):
     captured = normalise(await capture_published(app_client, registered_supabase_user))
     golden = _golden()
@@ -150,7 +150,7 @@ async def test_the_consumer_product_result_is_unchanged_under_a_published_rulese
 
 
 async def test_the_consumer_product_result_is_unchanged_under_an_unpublished_ruleset(
-    app_client, db_clean, off_clean, no_off_network,
+    app_client, db_clean, off_clean, no_off_network,  # noqa: F811
 ):
     captured = normalise(await capture_unpublished(app_client))
     assert captured["unpublished_ruleset"] == _golden()["unpublished_ruleset"]

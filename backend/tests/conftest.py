@@ -77,6 +77,23 @@ def alembic_head_revision() -> str:
     return ScriptDirectory.from_config(config).get_current_head()
 
 
+def alembic_revision_chain() -> list[str]:
+    """Every revision from the one head down to the base, newest first.
+
+    For a test that needs to say "this revision is applied, in the one linear
+    chain" without typing whatever happens to be the head today.
+    """
+    from pathlib import Path
+
+    from alembic.config import Config
+    from alembic.script import ScriptDirectory
+
+    backend_root = Path(__file__).resolve().parents[1]
+    config = Config(str(backend_root / "alembic.ini"))
+    config.set_main_option("script_location", str(backend_root / "migrations"))
+    return [revision.revision for revision in ScriptDirectory.from_config(config).walk_revisions()]
+
+
 @pytest.fixture(scope="session")
 def anyio_backend() -> str:
     return "asyncio"
