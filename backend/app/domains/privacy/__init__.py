@@ -337,6 +337,17 @@ REGISTRY: dict[str, Classification] = {
     # (without the internal anchor ids or the notice cursor), and removed with
     # the account.
     "product_watches": Classification.INCLUDED,
+    # --- Step 17: B2B Product Truth API ---
+    # Organisation and platform operational data, not consumer data. None of
+    # these tables references ``accounts``; account deletion never touches them
+    # and the consumer export never contains them, so the export schema stays
+    # 1.6 and its INCLUDED coverage is unchanged.
+    # Which organisations GlamGenius chose to give access to, and their limits.
+    "b2b_api_clients": Classification.NOT_USER_OWNED,
+    # A SHA-256 of each issued credential. Authenticates, so it never leaves.
+    "b2b_api_keys": Classification.SECRET_EXCLUDED,
+    # Aggregate request counts per client per UTC day. No barcode, no answer.
+    "b2b_api_usage_daily": Classification.OPERATIONAL,
 }
 
 

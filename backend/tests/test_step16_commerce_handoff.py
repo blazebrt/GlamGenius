@@ -40,7 +40,7 @@ from app.shared.database.base import Base
 from app.shared.database.sql import get_engine, get_sessionmaker
 from sqlalchemy import event, func, select
 
-from tests.conftest import alembic_head_revision, auth
+from tests.conftest import alembic_head_revision, alembic_revision_chain, auth
 from tests.test_official_records_api import (
     BARCODE,
     BRAND,
@@ -1240,7 +1240,10 @@ async def test_k_metrics_are_for_admins_only(app_client, db_clean, registered_su
 # L — nothing stored, nothing added
 # ===========================================================================
 def test_l_no_migration_and_the_head_is_unchanged():
-    assert alembic_head_revision() == "l0m1n2o3p4"
+    """Step 16 added no revision: Step 15's head is still in the chain and no
+    revision anywhere is commercial. (Step 17's B2B revision now sits on top.)"""
+    assert "l0m1n2o3p4" in alembic_revision_chain()
+    assert alembic_head_revision() == alembic_revision_chain()[0]
     versions = BACKEND / "migrations" / "versions"
     assert not [path for path in versions.glob("*.py") if re.search(r"commerce|step16|affiliate", path.name, re.I)]
     for path in COMMERCE_DIR.glob("*.py"):

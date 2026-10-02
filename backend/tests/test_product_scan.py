@@ -341,6 +341,10 @@ async def test_unknown_confirmed_pack_facts_feed_the_real_grader_without_off_cop
 ):
     from app.api.v2 import product as product_api
 
+    # Step 17: the route reaches the grader through the shared Product Truth
+    # authority, so that is where the real grader is intercepted.
+    from app.domains.product import truth as product_truth
+
     facts = {
         "product_name": "Regional millet snack",
         "brand": "Local Foods",
@@ -360,7 +364,7 @@ async def test_unknown_confirmed_pack_facts_feed_the_real_grader_without_off_cop
         "serving_size": "30 g",
     }
     captured = {}
-    real_grade_product = product_api.grade_product
+    real_grade_product = product_truth.grade_product
 
     def capture_product(product):
         captured["product"] = product
@@ -369,7 +373,7 @@ async def test_unknown_confirmed_pack_facts_feed_the_real_grader_without_off_cop
     async def published_rules(_session):
         return _published_ruleset()
 
-    monkeypatch.setattr(product_api, "grade_product", capture_product)
+    monkeypatch.setattr(product_truth, "grade_product", capture_product)
     monkeypatch.setattr(product_api, "resolve_production_ruleset", published_rules)
     token, account_id = await registered_supabase_user()
     run_id = await _seed_label_run(facts, account_id)

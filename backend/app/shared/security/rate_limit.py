@@ -30,9 +30,15 @@ actually wanted to hammer would no longer get a bucket.
 The state is per process. That is honest for this deployment — one web service,
 no shared cache — and it is a limiter, not a quota: the database constraints
 behind it are what actually guarantee correctness.
+
+A caller whose ceiling differs per key (Step 17: each B2B client has its own
+requests-per-minute) passes ``limit=`` to :meth:`FixedWindowLimiter.hit`; the
+constructor's ``max_per_window`` stays the default for everybody else, so an
+existing caller behaves exactly as before.
 """
 from __future__ import annotations
 
+import math
 import time
 from collections import deque
 
@@ -71,8 +77,12 @@ class FixedWindowLimiter:
         for key in stale:
             del self.state[key]
 
-    def hit(self, key: str) -> bool:
-        """Record one request for ``key``. True means it should be refused."""
+    def hit(self, key: str, *, limit: int | None = None) -> bool:
+        """Record one request for ``key``. True means it should be refused.
+
+        ``limit`` overrides ``max_per_window`` for this key only.
+        """
+        ceiling = self.max_per_window if limit is None else limit
         now = time.monotonic()
         bucket = self.state.get(key)
 
@@ -80,7 +90,7 @@ class FixedWindowLimiter:
             while bucket and now - bucket[0] > self.window_seconds:
                 bucket.popleft()
             if bucket:
-                if len(bucket) >= self.max_per_window:
+                if len(bucket) >= ceiling:
                     return True
                 bucket.append(now)
                 return False
@@ -102,8 +112,23 @@ class FixedWindowLimiter:
             # request under a flood is its own denial of service, on the disk.
             return True
 
+        if ceiling < 1:
+            return True
         self.state[key] = deque((now,))
         return False
+
+    def retry_after_seconds(self, key: str) -> int:
+        """Whole seconds until ``key`` next has room, never less than one.
+
+        Exact for a key with a live bucket: the oldest hit in the window has to
+        age out. A key with no bucket (refused because the table was full) gets
+        one whole window, the longest it could have to wait.
+        """
+        bucket = self.state.get(key)
+        if not bucket:
+            return max(1, math.ceil(self.window_seconds))
+        remaining = self.window_seconds - (time.monotonic() - bucket[0])
+        return max(1, math.ceil(remaining))
 
 
 __all__ = ["FixedWindowLimiter"]
