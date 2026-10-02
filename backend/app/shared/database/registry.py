@@ -11,6 +11,7 @@ from __future__ import annotations
 from app.domains.ai_gateway.models import AIRun, AIRunOutput
 from app.domains.analytics.models import AppEvent
 from app.domains.audit.models import AuditEvent
+from app.domains.b2b import models as b2b_models
 from app.domains.beta_access.models import (
     BetaUsageEvent,
     Invite,
@@ -117,4 +118,5 @@ __all__ = [
     "supplement_models",
     "PersonalDecisionRelease",
     "ConsumerReferralInvite",
+    "b2b_models",
 ]
