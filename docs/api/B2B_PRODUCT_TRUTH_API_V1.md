@@ -164,7 +164,7 @@ All errors are JSON: `{"detail": {"code": "...", "message": "...", "request_id":
 | 401 | `B2B_UNAUTHENTICATED` | The key is missing, malformed, unknown, expired, revoked, or your access is suspended. The response deliberately does not say which. Check the header; then contact GlamGenius with your key prefix. |
 | 422 | `B2B_BARCODE_INVALID` | Not an exact GS1 barcode with a valid check digit. Fix the barcode; do not retry as is. |
 | 422 | `B2B_QUERY_NOT_ACCEPTED` | Remove every query parameter. |
-| 429 | `B2B_RATE_LIMITED` | Per-minute limit reached. Wait `Retry-After` seconds. |
+| 429 | `B2B_RATE_LIMITED` | Authenticated client burst protection or platform security/admission protection. Wait `Retry-After` seconds in either case. |
 | 429 | `B2B_DAILY_QUOTA_EXHAUSTED` | Daily limit reached. `Retry-After` is the seconds until midnight UTC, when it resets. |
 | 500 | `INTERNAL_ERROR` | Retry later with backoff; report persistent failures with the `request_id`. |
 
@@ -178,7 +178,9 @@ All errors are JSON: `{"detail": {"code": "...", "message": "...", "request_id":
   authenticated request uses one unit, whether the answer is `available` or
   `not_enough_information`. Rejected requests (401, 422, 429) do not use a
   unit.
-- Back off on 429 using `Retry-After`. Do not retry 401 or 422 automatically.
+- `B2B_RATE_LIMITED` can also reflect platform admission protection, not only
+  your agreed requests-per-minute limit. Honor `Retry-After` in either case.
+  Do not retry 401 or 422 automatically.
 
 Your limits change how many answers you can get, never what any answer says.
 

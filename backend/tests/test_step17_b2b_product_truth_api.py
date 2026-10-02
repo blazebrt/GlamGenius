@@ -1181,6 +1181,7 @@ async def test_g_anonymous_network_limit_blocks_lookup_without_a_prefix_or_statu
     monkeypatch.setattr(quota, "AUTH_NETWORK_GLOBAL_PER_MINUTE", 10)
     await _expect_generic_401(await ask(app_client, unknown, GRADED))
     await _expect_generic_401(await ask(app_client, unknown, GRADED))
+    assert len(quota._auth_network_limiter.state["global"]) == 2
 
     async def authentication_must_not_run(*_args, **_kwargs):
         raise AssertionError("network-limited requests must not reach database authentication")
@@ -1197,6 +1198,40 @@ async def test_g_anonymous_network_limit_blocks_lookup_without_a_prefix_or_statu
         assert response.json()["detail"]["code"] == "B2B_RATE_LIMITED"
         assert 1 <= int(response.headers["Retry-After"]) <= 60
     assert blocked_unknown.json()["detail"]["message"] == blocked_known.json()["detail"]["message"]
+    assert len(quota._auth_network_limiter.state["global"]) == 2
+
+
+async def test_g_per_ip_refusals_leave_global_capacity_for_another_ip(app_client, db_clean, monkeypatch):
+    monkeypatch.setattr(network, "TRUSTED_PROXY_HOPS", 1)
+    monkeypatch.setattr(quota, "AUTH_NETWORK_PER_IP_PER_MINUTE", 2)
+    monkeypatch.setattr(quota, "AUTH_NETWORK_GLOBAL_PER_MINUTE", 3)
+    unknown = f"ggb_{'0' * 12}_{'a' * 64}"
+
+    async def from_ip(address):
+        return await ask(app_client, unknown, GRADED,
+                         headers={"X-Forwarded-For": f"198.51.100.1, {address}"})
+
+    with statements() as seen:
+        await _expect_generic_401(await from_ip("203.0.113.10"))
+        await _expect_generic_401(await from_ip("203.0.113.10"))
+        for _ in range(3):
+            refused = await from_ip("203.0.113.10")
+            assert refused.status_code == 429
+            assert refused.json()["detail"]["code"] == "B2B_RATE_LIMITED"
+            assert 1 <= int(refused.headers["Retry-After"]) <= 60
+    assert len([statement for statement in seen if "b2b_api_keys" in statement]) == 2
+    assert len(quota._auth_network_limiter.state["global"]) == 2
+
+    # IP B can still reach the indexed authentication lookup; only traffic
+    # that survives an IP gate can spend the third global admission.
+    await _expect_generic_401(await from_ip("203.0.113.11"))
+    assert len(quota._auth_network_limiter.state["global"]) == 3
+    with statements() as seen:
+        globally_refused = await from_ip("203.0.113.12")
+    assert globally_refused.status_code == 429
+    assert globally_refused.json()["detail"]["code"] == "B2B_RATE_LIMITED"
+    assert 1 <= int(globally_refused.headers["Retry-After"]) <= 60
+    assert not any("b2b_api_keys" in statement for statement in seen)
 
 
 async def test_g_global_network_limit_bounds_distinct_addresses_and_spoofed_leftmost_forwarding(
@@ -1217,6 +1252,7 @@ async def test_g_global_network_limit_bounds_distinct_addresses_and_spoofed_left
     assert spoofed.status_code == 429
     assert not any("b2b_api_keys" in statement for statement in seen)
     assert set(quota._auth_network_limiter.state) == {"global", "ip:203.0.113.9"}
+    assert len(quota._auth_network_limiter.state["global"]) == 2
     # Reset only the admission buckets to isolate the second bound: distinct
     # trusted addresses cannot collectively exceed the global lookup budget.
     quota.reset_auth_network_state()

@@ -85,11 +85,13 @@ def burst_retry_after(client_id: uuid.UUID, requests_per_minute: int) -> int | N
 
 def auth_network_retry_after(address: str | None) -> int | None:
     """Bound valid-shaped credentials before they can cause a database lookup."""
-    if _auth_network_limiter.hit(_AUTH_GLOBAL_KEY, limit=AUTH_NETWORK_GLOBAL_PER_MINUTE):
-        return _auth_network_limiter.retry_after_seconds(_AUTH_GLOBAL_KEY)
     key = f"ip:{address or '<unknown>'}"
     if _auth_network_limiter.hit(key, limit=AUTH_NETWORK_PER_IP_PER_MINUTE):
         return _auth_network_limiter.retry_after_seconds(key)
+    # Only traffic that survived its IP bound consumes process-wide lookup
+    # capacity. An exhausted IP must not drain the budget for other callers.
+    if _auth_network_limiter.hit(_AUTH_GLOBAL_KEY, limit=AUTH_NETWORK_GLOBAL_PER_MINUTE):
+        return _auth_network_limiter.retry_after_seconds(_AUTH_GLOBAL_KEY)
     return None
 
 

@@ -66,7 +66,7 @@ Neither accepts the other's credential.
 | Confirmed labels | `latest_label_snapshot`, `readable_label_snapshot`, `completeness` (Step 3/12A). | **Reused as-is** for eligibility. |
 | Published evidence | `resolve_production_ruleset`; per-row evidence on every factor. | **Reused as-is**; B2B distributes only rows on published rules that cite a published claim. |
 | Auth | Supabase JWT (`get_current_supabase_user`), `get_current_admin` (hidden-admin 404). | Admin routes **reuse** `get_current_admin`. B2B has its **own** dependency; no Supabase code path. |
-| Rate limiting | `FixedWindowLimiter` (in-process, bounded table). | **Reused**, with an optional per-key `limit=` and `retry_after_seconds()`; existing callers unchanged. |
+| Rate limiting | `FixedWindowLimiter` (in-process, bounded table). | **Reused** for pre-auth trusted-network admission and authenticated per-client burst protection, with an optional per-key `limit=` and `retry_after_seconds()`; existing callers unchanged. |
 | Audit | `audit.record` (keyed IP hash, request id). | **Reused** for every admin change. |
 | Redaction | Sentry `scrub_event`; log `OAuthRedactionFilter`. | **Extended** to redact anything shaped `ggb_…`, and `key_hash` by name. |
 | Privacy | Registry + `EXPORT_COVERAGE` (1.6, 112 INCLUDED). | Three new classifications; consumer export unchanged. |
@@ -240,13 +240,26 @@ work in between.
 
 ## 8. Quotas and rate limits
 
-1. **Burst:** the client's own `requests_per_minute`, in-process
+The request gate order is: malformed credential → trusted-network admission →
+credential authentication → authenticated client burst limit → request and
+barcode validation → daily quota → Product Truth. A malformed credential gets
+the same generic 401 before SQL and never spends network-admission capacity.
+
+1. **Network admission:** a security/availability bound, not a customer quota.
+   Valid-shaped credentials use the existing trusted `client_ip` authority
+   before the indexed key lookup. The in-process, bounded `FixedWindowLimiter`
+   admits at most 1,200/minute per trusted IP, then at most 2,400/minute
+   process-wide, with at most 4,096 keys. The per-IP check runs **first**:
+   requests it refuses never consume the global database-admission budget.
+   Either refusal returns 429 `B2B_RATE_LIMITED` with `Retry-After` and does
+   not reveal whether a key prefix exists. Step 18 may consider shared or
+   multi-instance infrastructure only after scaling evidence exists.
+2. **Authenticated burst:** the client's own `requests_per_minute`, in-process
    `FixedWindowLimiter` keyed by client id (never the secret), checked right
    after authentication, before any Product Truth work. Refusal: 429
    `B2B_RATE_LIMITED`, `Retry-After` = seconds until the oldest call in the
-   window ages out. Per process: honest for one web process; Step 18 decides
-   the multi-instance design once measured.
-2. **Daily allowance:** the client's `requests_per_day`, per database UTC day,
+   window ages out. It remains separate from network admission.
+3. **Daily allowance:** the client's `requests_per_day`, per database UTC day,
    taken by one atomic statement:
 
    ```sql
@@ -320,7 +333,7 @@ key is caught), and Sentry redacts `key_hash` and `api_key` by key name.
 | 401 | Any credential problem | `B2B_UNAUTHENTICATED` |
 | 422 | Not an exact GS1 barcode | `B2B_BARCODE_INVALID` |
 | 422 | Any query parameter at all | `B2B_QUERY_NOT_ACCEPTED` |
-| 429 | Per-minute limit | `B2B_RATE_LIMITED` (+ `Retry-After`) |
+| 429 | Network admission or authenticated per-minute limit | `B2B_RATE_LIMITED` (+ `Retry-After`) |
 | 429 | Daily allowance spent | `B2B_DAILY_QUOTA_EXHAUSTED` (+ `Retry-After`) |
 | 405 | Any method but GET on the truth route | — |
 | 500 | A genuine server failure only (including a would-be extra field) | `INTERNAL_ERROR` |
