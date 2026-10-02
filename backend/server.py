@@ -17,6 +17,7 @@ init_sentry()
 
 import logging
 
+from app.api.b2b import router as b2b_router
 from app.api.v2 import router as v2_router
 from app.config import (
     ALLOWED_ORIGINS,
@@ -43,6 +44,10 @@ app = FastAPI(
 )
 
 app.include_router(v2_router)
+# Step 17. The B2B Product Truth API: its own prefix, its own credential, one
+# read-only route. Never mounted under /api/v2 and never reachable with a
+# consumer token.
+app.include_router(b2b_router)
 
 _PUBLIC_PAGE_HEADERS = {
     "Cache-Control": "public, max-age=3600",

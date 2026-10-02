@@ -50,6 +50,12 @@ _APIKEY_QUERY = re.compile(r"([?&]apikey=)[^&#\s]+", re.I)
 _OAUTH_QUERY = re.compile(r"([?&](?:code|state|access_token|refresh_token|client_secret)=)[^&#\s]+", re.I)
 _OAUTH_KV = re.compile(r"((?:[\"']?\b(?:code|state|access_token|refresh_token|client_secret)\b[\"']?)\s*[:=]\s*[\"']?)[^\s,}&\"']+", re.I)
 _AUTH_HEADER = re.compile(r"((?:authorization\s*[:=]\s*)?Bearer\s+)[A-Za-z0-9._~+/=-]+", re.I)
+#: Step 17. A B2B API key (``ggb_<prefix>_<secret>``) anywhere in free text --
+#: a header echoed into an exception, a URL somebody pasted a key into, a
+#: misconfigured client's error. Deliberately looser than the real format so a
+#: truncated or malformed key is redacted too. The public prefix is logged on
+#: its own as 12 hex characters, which this does not touch.
+_B2B_API_KEY = re.compile(r"ggb_[A-Za-z0-9_-]{6,}")
 # A URL carrying credentials -- a database URL, a broker URL, anything with
 # `user:password@`. Redacted whole rather than just the credentials: the host
 # it names is infrastructure detail that nothing in a crash report needs, and
@@ -109,7 +115,7 @@ def _redact_ip_addresses(value: str) -> str:
 _SENSITIVE_KEY = re.compile(
     r"(?:image|photo|bytes|base64|ingredient|memory|jwt|token|"
     r"authorization|payment|order_id|receipt|email|phone|mobile|"
-    r"tel|password|secret|api_key|"
+    r"tel|password|secret|api_key|key_hash|"
     # Credentials and anything that identifies one account's storage. A
     # service-role key is the most dangerous value in this system and its name
     # matches none of the words above.
@@ -202,6 +208,7 @@ def _clean(value: Any, key: str = "") -> Any:
         value = _APIKEY_QUERY.sub(r"\1[REDACTED]", value)
         value = _OAUTH_QUERY.sub(r"\1[REDACTED]", value)
         value = _AUTH_HEADER.sub(r"\1[REDACTED]", value)
+        value = _B2B_API_KEY.sub(REDACTED, value)
         value = _OAUTH_KV.sub(r"\1[REDACTED]", value)
         return value
     return value

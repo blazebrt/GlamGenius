@@ -35,10 +35,13 @@ class OAuthRedactionFilter(logging.Filter):
     _kv = re.compile(r"((?:[\"']?\b(?:code|state|access_token|refresh_token|client_secret)\b[\"']?)\s*[:=]\s*[\"']?)[^\s,}&\"']+", re.I)
     _header = re.compile(r"((?:authorization\s*[:=]\s*)?Bearer\s+)[A-Za-z0-9._~+/=-]+", re.I)
     _credentialed_url = re.compile(r"\b[a-z][a-z0-9+.-]*://[^\s/:@]+:[^\s/@]+@\S*", re.I)
+    # Step 17: a B2B API key, wherever it appears, including malformed ones.
+    _b2b_api_key = re.compile(r"ggb_[A-Za-z0-9_-]{6,}")
 
     def _redact_text(self, value: str) -> str:
         value = self._credentialed_url.sub("[REDACTED]", value)
         value = self._header.sub(r"\1[REDACTED]", value)
+        value = self._b2b_api_key.sub("[REDACTED]", value)
         value = self._query.sub(r"\1[REDACTED]", value)
         return self._kv.sub(r"\1[REDACTED]", value)
 

@@ -9,6 +9,7 @@ from fastapi import APIRouter
 from app.api.v2 import (
     access,
     admin,
+    b2b_admin,
     commerce,
     community,
     config,
@@ -71,6 +72,9 @@ router.include_router(growth.router, tags=["v2-growth"])
 # telemetry. Mounted separately from growth: two contracts, one table.
 router.include_router(commerce.router, tags=["v2-commerce"])
 router.include_router(admin.router, tags=["v2-admin"])
+# Step 17. Pilot issuance of B2B API access, admins only. The B2B API itself is
+# a separate surface (``app.api.b2b``, ``/api/b2b/v1``), not part of /api/v2.
+router.include_router(b2b_admin.router, tags=["v2-admin-b2b"])
 # Not a customer surface: a shared-secret door for the external scheduler.
 router.include_router(internal_scheduler.router)
 router.include_router(personal_applicability_admin.router, tags=["v2-admin-personal-applicability"])
