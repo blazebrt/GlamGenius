@@ -182,8 +182,10 @@ async def test_a_a_not_found_scan_through_the_real_route_does_not_activate(
     from tests.test_step12c_product_watch import _customer
 
     token, account_id, device = await _customer(app_client, registered_supabase_user)
+    # The account's own scan: only its bearer makes a new scan the account's,
+    # however the phone was claimed (audit Lane 1, F03).
     recorded = await app_client.post(
-        "/api/v2/scan/events", headers=device,
+        "/api/v2/scan/events", headers={**device, **auth(token)},
         json={"barcode": "8900000000017", "client_scan_id": uuid.uuid4().hex},
     )
     assert recorded.status_code == 201, recorded.text
