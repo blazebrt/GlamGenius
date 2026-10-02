@@ -1,5 +1,11 @@
 # Architecture inventory (Fix 10, WP4)
 
+> **HISTORICAL / SUPERSEDED.** This page describes an earlier V2/V3
+> appearance product and deployment model, not today's scan-first Product
+> Truth architecture. Do not use its Mongo, S3, Razorpay, navigation or
+> deployment claims for operations. Use the [current authority index](../architecture/ARCHITECTURE_AUTHORITY.md)
+> and inspect the exact code/deployed SHA. Retained for design provenance.
+
 This document is the single-page map of what GlamGenius actually is,
 today. It is deliberately short. The ADRs (Architecture Decision
 Records) under `docs/engineering/adrs/` carry the rationale for the

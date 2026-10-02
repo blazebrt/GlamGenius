@@ -1,5 +1,10 @@
 # GlamGenius V3 Product Architecture Contract
 
+> **HISTORICAL / SUPERSEDED.** The Personal Appearance mission and navigation
+> below are not the current scan-first Product Truth product. Preserve this
+> V3 design record, but do not use it to restore retired Style/wardrobe flows
+> or override [current architecture authority](architecture/ARCHITECTURE_AUTHORITY.md).
+
 ## 1. Product Mission
 GlamGenius V3 is a **Personal Appearance Decision Engine**. Its purpose is to reduce the research, planning, and decision-making users currently perform across clothing, outfits, shoes, accessories, skin care, hair care, perfumes, products, ingredients, routines, nutrition, supplements, maintenance, and event preparation.
 

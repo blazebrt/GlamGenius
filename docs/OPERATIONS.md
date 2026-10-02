@@ -1,6 +1,16 @@
 # Running GlamGenius
 
-Operations, backup, restore, monitoring, and incident response for the GlamGenius V2-only Personal Appearance Operating System.
+**CURRENT operational authority begins at [Render Pre-PMF Runtime (zero cost)](#render-pre-pmf-runtime-zero-cost).**
+Checked against repository `main` `485729ab3ddba92c53257e7eea7fa2876212e3f7`
+on 2026-10-02; verify the exact deployed SHA and live provider settings
+before any production action. Sections 1–7 and the Step 8I historical
+activation record below were written for earlier host/V2/V3 arrangements.
+They are retained for provenance, **not live procedures**: do not infer an
+always-on Celery worker, host systemd/cron, paid PITR or the retired Personal
+Appearance product from them. The live section is the one deployment
+procedure; [scale readiness](operations/SCALE_READINESS_AND_SLOS.md) records
+unverified capabilities and future gates, and [architecture authority](architecture/ARCHITECTURE_AUTHORITY.md)
+classifies related documents.
 
 ---
 
@@ -571,8 +581,9 @@ cron — because paying for infrastructure before product-market fit is a bet on
 demand nobody has measured. Render's free tier has no background workers and no
 cron, so both batch jobs moved behind HTTP and Supabase Cron now invokes them.
 
-The systemd guidance in §6 is **not** replaced. It remains the correct approach
-for anyone deploying to a host they own.
+The systemd guidance in §6 is a historical self-hosting example, **not** a
+second live GlamGenius deployment path. Any future self-hosted topology needs
+its own reviewed design and runbook.
 
 ### What free tier actually means
 
@@ -987,7 +998,7 @@ checkable after the fact rather than only at deploy time.
 half of its start command, before `exec uvicorn`. It validates production
 configuration, takes the PostgreSQL advisory lock (`LOCK_ID = 4829103`), runs
 `alembic upgrade head`, runs `alembic check` for drift, provisions Store A,
-seeds reference data and verifies the seed version, the seven inventory
+seeds reference data and verifies the seed version, the four retained inventory
 categories, the feature flags and the ingredient catalogue.
 
 *Ordering:* with one service there is one runner, but the advisory lock stays
