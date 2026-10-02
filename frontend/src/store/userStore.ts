@@ -197,10 +197,26 @@ const emptyProfile = (id: string, email?: string): UserProfile => ({
  * The migration matters for exactly that case. Someone who signed up, closed
  * the app and is waiting on a confirmation email has their only copy of the
  * challenge in the old location; dropping it would cost them the invite.
+ *
+ * So the old copy is deleted only once the keychain is proven to hold the same
+ * value: written, read back, compared (``setItemVerified``). A write that
+ * failed, or that reads back as anything else, leaves the old copy where it
+ * is; this call still answers with it, and the next read tries again. Nothing
+ * here treats "the write did not throw" as "the write landed".
  */
 async function readStoredChallenge(): Promise<string | null> {
   const secure = await secureSessionStorage.getItem(CHALLENGE_STORAGE_KEY);
-  if (secure) return secure;
+  if (secure) {
+    // Only an older build ever wrote the old location, so with a readable
+    // keychain copy any value left there is stale. Removing it is safe, and a
+    // secret that has been migrated should not stay in an unencrypted file.
+    try {
+      await AsyncStorage.removeItem(CHALLENGE_STORAGE_KEY);
+    } catch {
+      // Best effort; the next read tries again.
+    }
+    return secure;
+  }
 
   let legacy: string | null = null;
   try {
@@ -208,13 +224,11 @@ async function readStoredChallenge(): Promise<string | null> {
   } catch {
     return null;
   }
-  if (legacy) {
-    await writeStoredChallenge(legacy);
+  if (legacy && (await secureSessionStorage.setItemVerified(CHALLENGE_STORAGE_KEY, legacy))) {
     try {
       await AsyncStorage.removeItem(CHALLENGE_STORAGE_KEY);
     } catch {
-      // Leaving the old copy behind is worse than not leaving it, but losing
-      // the reservation is worse still. The keychain copy is written first.
+      // The keychain has it; the old copy goes on the next read.
     }
   }
   return legacy;
