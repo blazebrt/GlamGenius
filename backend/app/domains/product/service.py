@@ -516,14 +516,22 @@ async def _attachable_anonymous_scan(session: AsyncSession, device_id: uuid.UUID
     and it is nobody's history. If it were attachable, the claimant's next
     sign-in on this phone would collect it, and with it a stranger's scans.
 
-    The claim is read fresh, with ``FOR NO KEY UPDATE`` on the device row: the
-    lock a claim's conditional UPDATE also takes, and the one this
-    transaction's own ``last_seen_at``/``scan_count`` update would take at
-    flush anyway. So this scan and a concurrent claim are serialised. A claim
-    that committed first is seen, and the scan is not attachable. A claim that
-    comes second waits, and then attaches this scan as one made before it. The
-    ORM object resolved from the token is not consulted: it was read before the
-    lock, and may predate the claim.
+    The claim is read fresh, with ``FOR UPDATE`` on the device row. That
+    conflicts with the row lock a claim's conditional UPDATE takes, so this
+    scan and a concurrent claim are serialised. A claim that committed first is
+    seen, and the scan is not attachable. A claim that comes second waits, and
+    then attaches this scan as one made before it. The ORM object resolved from
+    the token is not consulted: it was read before the lock, and may predate
+    the claim.
+
+    ``FOR UPDATE`` rather than ``FOR NO KEY UPDATE``: the ``key_share`` modes
+    are reserved to the identity service's account locks
+    (``test_step11c_account_lock_order``). The stronger mode adds a conflict
+    only with the ``FOR KEY SHARE`` of a foreign-key check, from another
+    request inserting a row that references this device. Such a request
+    resolved the device, so its flush writes this row's ``last_seen_at``
+    before any row that references it. It therefore already waits on this
+    lock either way.
 
     No account row is involved: the scan has no ``account_id``, so taking the
     device lock first cannot close a cycle with the deletion worker, which
@@ -534,7 +542,7 @@ async def _attachable_anonymous_scan(session: AsyncSession, device_id: uuid.UUID
     claimed_by = await session.scalar(
         select(ScanDevice.claimed_by_account_id)
         .where(ScanDevice.id == device_id)
-        .with_for_update(key_share=True)
+        .with_for_update()
     )
     return claimed_by is None
 
