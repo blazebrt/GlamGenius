@@ -1,0 +1,4234 @@
+{
+ "culinary_ingredient": {
+  "product_result": {
+   "alternative": {
+    "candidate": null,
+    "policy_version": "comparable-food-alternative-v1",
+    "reason_key": "current_product_has_no_published_grade",
+    "status": "not_enough_information"
+   },
+   "attribution": null,
+   "band": "yellow",
+   "barcode": "8901000000024",
+   "basis": "solid",
+   "better_next_action": null,
+   "brand": "Dairy Co",
+   "community_observations": {
+    "active_window_days": 90,
+    "brand_reply_url": null,
+    "policy_version": "community-observations-v1",
+    "public_enabled": false,
+    "signals": []
+   },
+   "components": [
+    {
+     "band": "green",
+     "finding": null,
+     "key": "processing",
+     "rule": null,
+     "source": null,
+     "source_url": null,
+     "sources": [],
+     "state": "nova2"
+    },
+    {
+     "band": "green",
+     "exempt": [],
+     "finding": null,
+     "high": [],
+     "key": "nutrients",
+     "rule": null,
+     "source": null,
+     "source_url": null,
+     "sources": [],
+     "state": "clear"
+    },
+    {
+     "band": "green",
+     "finding": null,
+     "key": "additives",
+     "rule": null,
+     "source": null,
+     "source_url": null,
+     "sources": [],
+     "state": "none"
+    },
+    {
+     "band": "green",
+     "declared_percent": null,
+     "finding": null,
+     "ingredient": null,
+     "key": "naming",
+     "rule": null,
+     "source": null,
+     "source_url": null,
+     "sources": [],
+     "state": "not_promised"
+    }
+   ],
+   "confidence": {
+    "level": "unverified",
+    "text": "From one source, not checked yet."
+   },
+   "decision": {
+    "action": null,
+    "reason_key": "not_graded"
+   },
+   "engine_version": "food-grade-v1",
+   "evidence": {
+    "ruleset_version": "v1",
+    "unpublished_rules": []
+   },
+   "facts_provenance": "confirmed_label_snapshot",
+   "grade": null,
+   "helps": [
+    {
+     "band": "green",
+     "evidence": {
+      "evidence_claim_ids": [],
+      "evidence_claim_version": null,
+      "rule_version": null,
+      "status": "candidate"
+     },
+     "explanation": "declared_on_label",
+     "key": "protein",
+     "label": "protein",
+     "order": 60,
+     "quantity": {
+      "basis": "per_100_g",
+      "unit": "g",
+      "value": 0.0
+     },
+     "rule": null,
+     "sources": [],
+     "status": "declared"
+    },
+    {
+     "band": "green",
+     "evidence": {
+      "evidence_claim_ids": [],
+      "evidence_claim_version": null,
+      "rule_version": null,
+      "status": "candidate"
+     },
+     "explanation": "lower_processing_group",
+     "key": "processing",
+     "label": "processing",
+     "order": 10,
+     "quantity": null,
+     "rule": null,
+     "sources": [],
+     "status": "no_concern_found"
+    }
+   ],
+   "ingredients": [
+    {
+     "actions": {
+      "explain": false,
+      "report": true,
+      "source": false
+     },
+     "band": "green",
+     "description": null,
+     "detail": null,
+     "label": "ghee",
+     "name": "ghee",
+     "source": null,
+     "sources": [],
+     "status": "no_concern_found",
+     "tier": "plain",
+     "why_flagged": null
+    }
+   ],
+   "label_change": {
+    "changed_fields": [],
+    "current_version": null,
+    "formula": {
+     "current_parse_status": null,
+     "only_on_current_label": [],
+     "only_on_previous_label": [],
+     "previous_parse_status": null,
+     "status": "not_applicable"
+    },
+    "previous_version": null,
+    "scope": "confirmed_label_history",
+    "status": "unavailable"
+   },
+   "label_version": {
+    "changed_fields": null,
+    "completeness": "complete_for_grading",
+    "content_fingerprint": "37ee788580330c694870cad579ed2a0e4156c1cd3d275303a9978e2b787aaedf",
+    "id": "<uuid>",
+    "observed_at": "<timestamp>",
+    "version_number": 1
+   },
+   "lowers": [],
+   "missing": [],
+   "negatives": [],
+   "nutrition": {
+    "protein_g": 0.0,
+    "salt_g": null,
+    "total_fat_g": null,
+    "total_sugar_g": null
+   },
+   "official_records": {
+    "authority": "FSSAI / FoSCoS",
+    "last_successful_check_at": null,
+    "record_type": "food_recall",
+    "records": [],
+    "source_url": "https://foscos.fssai.gov.in/food-recall"
+   },
+   "outcome": "not_graded",
+   "pack_size_g": 200.0,
+   "physical_pack_context": false,
+   "positives": [
+    {
+     "band": "green",
+     "evidence": {
+      "evidence_claim_ids": [],
+      "evidence_claim_version": null,
+      "rule_version": null,
+      "status": "candidate"
+     },
+     "explanation": "declared_on_label",
+     "key": "protein",
+     "label": "protein",
+     "order": 60,
+     "quantity": {
+      "basis": "per_100_g",
+      "unit": "g",
+      "value": 0.0
+     },
+     "rule": null,
+     "sources": [],
+     "status": "declared"
+    },
+    {
+     "band": "green",
+     "evidence": {
+      "evidence_claim_ids": [],
+      "evidence_claim_version": null,
+      "rule_version": null,
+      "status": "candidate"
+     },
+     "explanation": "lower_processing_group",
+     "key": "processing",
+     "label": "processing",
+     "order": 10,
+     "quantity": null,
+     "rule": null,
+     "sources": [],
+     "status": "no_concern_found"
+    }
+   ],
+   "product_name": "Ghee",
+   "purity_note": "Check the pack states 100% milk fat and carries an FSSAI licence number. Ghee is adulterated more often than most cooking fats.",
+   "quantity_guidance": "Counted within total visible fat. Transcribe the ICMR-NIN 2024 figure for visible fat or oil per day.",
+   "result_contract_version": "v1",
+   "taxonomy": {
+    "category": "culinary_ingredient",
+    "domain": "consumed",
+    "subcategory": "ghee"
+   },
+   "trace": [
+    {
+     "effect": "Returns NOT_GRADED. No letter is produced.",
+     "evidence": {
+      "evidence_claim_ids": [],
+      "evidence_claim_version": null,
+      "rule_version": null,
+      "status": "candidate"
+     },
+     "finding": "Ghee is a cooking ingredient.",
+     "rule_id": "grade.step0.culinary_ingredient",
+     "source": "ICMR-NIN. Dietary Guidelines for Indians, 2024. National Institute of Nutrition, Hyderabad. Table 15.1 (label reading thresholds).",
+     "source_id": null,
+     "source_url": null,
+     "step": 0,
+     "step_name": "Culinary ingredient check"
+    }
+   ],
+   "value": {
+    "comparison": null,
+    "policy_version": "pack-mrp-value-v1",
+    "reason_key": "no_comparable_alternative",
+    "status": "not_enough_information"
+   }
+  },
+  "purchase_check": {
+   "alternative": {
+    "candidate": null,
+    "reason_key": "current_product_has_no_published_grade",
+    "status": "not_enough_information"
+   },
+   "authorities": [
+    {
+     "action": null,
+     "authority": "product_result",
+     "reason_key": "not_graded",
+     "status": "not_enough_information"
+    },
+    {
+     "authority": "official_records",
+     "status": "physical_pack_required"
+    },
+    {
+     "authority": "label_change",
+     "effect": "context_only",
+     "status": "unavailable"
+    },
+    {
+     "authority": "ownership",
+     "effect": "context_only",
+     "status": "sign_in_required"
+    },
+    {
+     "authority": "decision_memory",
+     "effect": "context_only",
+     "status": "sign_in_required"
+    },
+    {
+     "authority": "alternative",
+     "effect": "context_only",
+     "status": "not_enough_information"
+    }
+   ],
+   "boundary": null,
+   "context": {
+    "category": "culinary_ingredient",
+    "kind": "scan",
+    "strategy": "scan_product"
+   },
+   "contract_version": "step-14-v1",
+   "decision": {
+    "decision_fingerprint": "53bcf017500de9fa29362dcc421cfdb1f5685eda752999b21f383bdefec6a513",
+    "primary_reason_authority": "product_result",
+    "primary_reason_code": "not_graded",
+    "state": "not_enough_information",
+    "verdict": null
+   },
+   "identity": {
+    "barcode": "8901000000024",
+    "content_fingerprint": "37ee788580330c694870cad579ed2a0e4156c1cd3d275303a9978e2b787aaedf",
+    "label_version": 1,
+    "physical_pack_context": false,
+    "reference_view": false,
+    "state": "exact"
+   },
+   "memory": {
+    "fidelity": "user_outcome_only",
+    "kind": "scan_decision",
+    "state": "sign_in_required"
+   },
+   "missing_information": [
+    "physical_pack"
+   ],
+   "ownership": {
+    "authority": "inventory_product_link",
+    "effect": "context_only",
+    "state": "sign_in_required"
+   },
+   "subject": null,
+   "value": {
+    "missing": [
+     "current_price"
+    ],
+    "state": "missing"
+   }
+  }
+ },
+ "graded_reference_capture": {
+  "product_result": {
+   "alternative": {
+    "candidate": {
+     "attribution": {
+      "license": "Open Database License (ODbL) v1.0",
+      "license_url": "https://opendatacommons.org/licenses/odbl/1-0/",
+      "source_url": "https://world.openfoodfacts.org/",
+      "text": "Contains information from Open Food Facts, made available under the Open Database License (ODbL)"
+     },
+     "band": "green",
+     "barcode": "8901000000002",
+     "brand": "Sunfield",
+     "comparison": {
+      "basis": "per_100g",
+      "candidate_grade": "B",
+      "category_match": "exact_source_taxonomy",
+      "category_source": "open_food_facts",
+      "current_grade": "C"
+     },
+     "decision": "buy",
+     "grade": "B",
+     "product_name": "Sunfield Oats"
+    },
+    "policy_version": "comparable-food-alternative-v1",
+    "reason_key": "comparable_option_found",
+    "status": "available"
+   },
+   "attribution": {
+    "license": "Open Database License (ODbL) v1.0",
+    "license_url": "https://opendatacommons.org/licenses/odbl/1-0/",
+    "source_url": "https://world.openfoodfacts.org/",
+    "text": "Contains information from Open Food Facts, made available under the Open Database License (ODbL)"
+   },
+   "band": "yellow",
+   "barcode": "8901000000001",
+   "basis": "solid",
+   "better_next_action": null,
+   "brand": "Northstar",
+   "community_observations": {
+    "active_window_days": 90,
+    "brand_reply_url": null,
+    "policy_version": "community-observations-v1",
+    "public_enabled": false,
+    "signals": []
+   },
+   "components": [
+    {
+     "band": "red",
+     "finding": "NOVA group 4. The ingredient list contains emulsifier.",
+     "key": "processing",
+     "rule": "Ceiling C. Nothing in the nutrition panel can lift a group 4 product above C.",
+     "source": "Monteiro CA, Cannon G, Levy RB, et al. Ultra-processed foods: what they are and how to identify them. Public Health Nutrition 22(5):936-941, 2019.",
+     "source_url": "https://doi.org/10.1017/S1368980018003762",
+     "sources": [
+      {
+       "identifier": "MONTEIRO-NOVA-2019",
+       "name": "Monteiro CA, Cannon G, Levy RB, et al. Ultra-processed foods: what they are and how to identify them. Public Health Nutrition 22(5):936-941, 2019.",
+       "publisher": "Public Health Nutrition (Cambridge University Press)",
+       "url": "https://doi.org/10.1017/S1368980018003762",
+       "version": "MONTEIRO-NOVA-2019"
+      }
+     ],
+     "state": "nova4"
+    },
+    {
+     "band": "green",
+     "exempt": [],
+     "finding": null,
+     "high": [],
+     "key": "nutrients",
+     "rule": null,
+     "source": null,
+     "source_url": null,
+     "sources": [],
+     "state": "clear"
+    },
+    {
+     "band": "green",
+     "finding": "No red-tier or black-tier additive on the label.",
+     "key": "additives",
+     "rule": null,
+     "source": "FSSAI. Food Safety and Standards (Food Products Standards and Food Additives) Regulations, 2011, as amended.",
+     "source_url": "https://www.fssai.gov.in/cms/food-safety-and-standards-regulations.php",
+     "sources": [
+      {
+       "identifier": "FSSAI-ADDITIVES-2011",
+       "name": "FSSAI. Food Safety and Standards (Food Products Standards and Food Additives) Regulations, 2011, as amended.",
+       "publisher": "FSSAI",
+       "url": "https://www.fssai.gov.in/cms/food-safety-and-standards-regulations.php",
+       "version": "FSSAI-ADDITIVES-2011"
+      }
+     ],
+     "state": "none"
+    },
+    {
+     "band": "green",
+     "declared_percent": null,
+     "finding": "The product name does not promise a particular ingredient.",
+     "ingredient": null,
+     "key": "naming",
+     "rule": null,
+     "source": "FSSAI. Food Safety and Standards (Labelling and Display) Regulations, 2020, and the subsequent front-of-pack nutrition labelling amendments.",
+     "source_url": "https://www.fssai.gov.in/cms/food-safety-and-standards-regulations.php",
+     "sources": [
+      {
+       "identifier": "FSSAI-LABELLING-2020",
+       "name": "FSSAI. Food Safety and Standards (Labelling and Display) Regulations, 2020, and the subsequent front-of-pack nutrition labelling amendments.",
+       "publisher": "FSSAI",
+       "url": "https://www.fssai.gov.in/cms/food-safety-and-standards-regulations.php",
+       "version": "FSSAI-LABELLING-2020"
+      }
+     ],
+     "state": "not_promised"
+    }
+   ],
+   "confidence": {
+    "level": "unverified",
+    "text": "From one source, not checked yet."
+   },
+   "decision": {
+    "action": "wait",
+    "reason_key": "processing"
+   },
+   "engine_version": "food-grade-v1",
+   "evidence": {
+    "ruleset_version": "v1",
+    "unpublished_rules": []
+   },
+   "facts_provenance": "confirmed_label_snapshot",
+   "grade": "C",
+   "helps": [
+    {
+     "band": "green",
+     "evidence": {
+      "evidence_claim_ids": [],
+      "evidence_claim_version": null,
+      "rule_version": null,
+      "status": "candidate"
+     },
+     "explanation": "declared_on_label",
+     "key": "protein",
+     "label": "protein",
+     "order": 60,
+     "quantity": {
+      "basis": "per_100_g",
+      "unit": "g",
+      "value": 7.0
+     },
+     "rule": null,
+     "sources": [],
+     "status": "declared"
+    },
+    {
+     "band": "green",
+     "evidence": {
+      "evidence_claim_ids": [],
+      "evidence_claim_version": null,
+      "rule_version": null,
+      "status": "candidate"
+     },
+     "explanation": "declared_on_label",
+     "key": "fibre",
+     "label": "fibre",
+     "order": 60,
+     "quantity": {
+      "basis": "per_100_g",
+      "unit": "g",
+      "value": 3.0
+     },
+     "rule": null,
+     "sources": [],
+     "status": "declared"
+    }
+   ],
+   "ingredients": [
+    {
+     "actions": {
+      "explain": false,
+      "report": true,
+      "source": false
+     },
+     "band": "green",
+     "description": null,
+     "detail": null,
+     "label": "maize",
+     "name": "maize",
+     "source": null,
+     "sources": [],
+     "status": "no_concern_found",
+     "tier": "plain",
+     "why_flagged": null
+    },
+    {
+     "actions": {
+      "explain": false,
+      "report": true,
+      "source": false
+     },
+     "band": "green",
+     "description": null,
+     "detail": null,
+     "label": "sugar",
+     "name": "sugar",
+     "source": null,
+     "sources": [],
+     "status": "no_concern_found",
+     "tier": "plain",
+     "why_flagged": null
+    },
+    {
+     "actions": {
+      "explain": false,
+      "report": true,
+      "source": false
+     },
+     "band": "green",
+     "description": null,
+     "detail": null,
+     "label": "salt",
+     "name": "salt",
+     "source": null,
+     "sources": [],
+     "status": "no_concern_found",
+     "tier": "plain",
+     "why_flagged": null
+    },
+    {
+     "actions": {
+      "explain": false,
+      "report": true,
+      "source": false
+     },
+     "band": "green",
+     "description": null,
+     "detail": null,
+     "label": "flavouring",
+     "name": "flavouring",
+     "source": null,
+     "sources": [],
+     "status": "no_concern_found",
+     "tier": "plain",
+     "why_flagged": null
+    },
+    {
+     "actions": {
+      "explain": true,
+      "report": true,
+      "source": true
+     },
+     "band": "green",
+     "description": "Keeps oil and water mixed.",
+     "detail": {
+      "authority_position": "FSSAI. Food Safety and Standards (Food Products Standards and Food Additives) Regulations, 2011, as amended.",
+      "evidence_status": "low",
+      "interpretation": null,
+      "rule": null,
+      "source": {
+       "identifier": "FSSAI-ADDITIVES-2011",
+       "name": "FSSAI. Food Safety and Standards (Food Products Standards and Food Additives) Regulations, 2011, as amended.",
+       "publisher": "FSSAI",
+       "url": "https://www.fssai.gov.in/cms/food-safety-and-standards-regulations.php",
+       "version": "FSSAI-ADDITIVES-2011"
+      },
+      "what_it_does": "Keeps oil and water mixed.",
+      "why_flagged": null
+     },
+     "label": "Lecithin · INS 322",
+     "name": "emulsifier (ins 322)",
+     "source": "FSSAI. Food Safety and Standards (Food Products Standards and Food Additives) Regulations, 2011, as amended.",
+     "sources": [
+      {
+       "identifier": "FSSAI-ADDITIVES-2011",
+       "name": "FSSAI. Food Safety and Standards (Food Products Standards and Food Additives) Regulations, 2011, as amended.",
+       "publisher": "FSSAI",
+       "url": "https://www.fssai.gov.in/cms/food-safety-and-standards-regulations.php",
+       "version": "FSSAI-ADDITIVES-2011"
+      }
+     ],
+     "status": "worth_knowing",
+     "tier": "green",
+     "why_flagged": null
+    }
+   ],
+   "label_change": {
+    "changed_fields": [],
+    "current_version": null,
+    "formula": {
+     "current_parse_status": null,
+     "only_on_current_label": [],
+     "only_on_previous_label": [],
+     "previous_parse_status": null,
+     "status": "not_applicable"
+    },
+    "previous_version": null,
+    "scope": "confirmed_label_history",
+    "status": "unavailable"
+   },
+   "label_version": {
+    "changed_fields": null,
+    "completeness": "complete_for_grading",
+    "content_fingerprint": "e108c9d73d710cd8ecfa85be9fce984f1baa7ba27816ae952574d73eeb1c5440",
+    "id": "<uuid>",
+    "observed_at": "<timestamp>",
+    "version_number": 1
+   },
+   "lowers": [
+    {
+     "band": "red",
+     "detail": {
+      "finding": "NOVA group 4. The ingredient list contains emulsifier.",
+      "nova_group": 4
+     },
+     "evidence": {
+      "evidence_claim_ids": [],
+      "evidence_claim_version": null,
+      "rule_version": "v1",
+      "status": "published"
+     },
+     "explanation": "highly_processed",
+     "key": "processing",
+     "label": "processing",
+     "order": 10,
+     "quantity": null,
+     "rule": "grade.step1.nova_4",
+     "sources": [
+      {
+       "identifier": "MONTEIRO-NOVA-2019",
+       "name": "Monteiro CA, Cannon G, Levy RB, et al. Ultra-processed foods: what they are and how to identify them. Public Health Nutrition 22(5):936-941, 2019.",
+       "publisher": "Public Health Nutrition (Cambridge University Press)",
+       "url": "https://doi.org/10.1017/S1368980018003762",
+       "version": "MONTEIRO-NOVA-2019"
+      }
+     ],
+     "status": "flagged"
+    }
+   ],
+   "missing": [],
+   "negatives": [
+    {
+     "band": "red",
+     "detail": {
+      "finding": "NOVA group 4. The ingredient list contains emulsifier.",
+      "nova_group": 4
+     },
+     "evidence": {
+      "evidence_claim_ids": [],
+      "evidence_claim_version": null,
+      "rule_version": "v1",
+      "status": "published"
+     },
+     "explanation": "highly_processed",
+     "key": "processing",
+     "label": "processing",
+     "order": 10,
+     "quantity": null,
+     "rule": "grade.step1.nova_4",
+     "sources": [
+      {
+       "identifier": "MONTEIRO-NOVA-2019",
+       "name": "Monteiro CA, Cannon G, Levy RB, et al. Ultra-processed foods: what they are and how to identify them. Public Health Nutrition 22(5):936-941, 2019.",
+       "publisher": "Public Health Nutrition (Cambridge University Press)",
+       "url": "https://doi.org/10.1017/S1368980018003762",
+       "version": "MONTEIRO-NOVA-2019"
+      }
+     ],
+     "status": "flagged"
+    }
+   ],
+   "nutrition": {
+    "protein_g": 7.0,
+    "salt_g": 0.5,
+    "total_fat_g": null,
+    "total_sugar_g": 8.0
+   },
+   "official_records": {
+    "authority": "FSSAI / FoSCoS",
+    "last_successful_check_at": null,
+    "record_type": "food_recall",
+    "records": [],
+    "source_url": "https://foscos.fssai.gov.in/food-recall"
+   },
+   "outcome": "graded",
+   "pack_size_g": 200.0,
+   "physical_pack_context": false,
+   "positives": [
+    {
+     "band": "green",
+     "evidence": {
+      "evidence_claim_ids": [],
+      "evidence_claim_version": null,
+      "rule_version": null,
+      "status": "candidate"
+     },
+     "explanation": "declared_on_label",
+     "key": "protein",
+     "label": "protein",
+     "order": 60,
+     "quantity": {
+      "basis": "per_100_g",
+      "unit": "g",
+      "value": 7.0
+     },
+     "rule": null,
+     "sources": [],
+     "status": "declared"
+    },
+    {
+     "band": "green",
+     "evidence": {
+      "evidence_claim_ids": [],
+      "evidence_claim_version": null,
+      "rule_version": null,
+      "status": "candidate"
+     },
+     "explanation": "declared_on_label",
+     "key": "fibre",
+     "label": "fibre",
+     "order": 60,
+     "quantity": {
+      "basis": "per_100_g",
+      "unit": "g",
+      "value": 3.0
+     },
+     "rule": null,
+     "sources": [],
+     "status": "declared"
+    }
+   ],
+   "product_name": "Northstar Corn Flakes",
+   "purity_note": null,
+   "quantity_guidance": null,
+   "result_contract_version": "v1",
+   "taxonomy": {
+    "category": "packaged_food",
+    "domain": "consumed",
+    "subcategory": "other_packaged_food"
+   },
+   "trace": [
+    {
+     "effect": null,
+     "evidence": {
+      "evidence_claim_ids": [],
+      "evidence_claim_version": null,
+      "rule_version": null,
+      "status": "candidate"
+     },
+     "finding": "This is a food, not something used to cook with.",
+     "rule_id": "grade.step0.not_a_culinary_ingredient",
+     "source": "GlamGenius culinary ingredient list",
+     "source_id": null,
+     "source_url": null,
+     "step": 0,
+     "step_name": "Culinary ingredient check"
+    },
+    {
+     "effect": "Ceiling C. Nothing in the nutrition panel can lift a group 4 product above C.",
+     "evidence": {
+      "evidence_claim_ids": [],
+      "evidence_claim_version": null,
+      "rule_version": "v1",
+      "status": "published"
+     },
+     "finding": "NOVA group 4. The ingredient list contains emulsifier.",
+     "rule_id": "grade.step1.nova_4",
+     "source": "Monteiro CA, Cannon G, Levy RB, et al. Ultra-processed foods: what they are and how to identify them. Public Health Nutrition 22(5):936-941, 2019.",
+     "source_id": "MONTEIRO-NOVA-2019",
+     "source_url": "https://doi.org/10.1017/S1368980018003762",
+     "step": 1,
+     "step_name": "Processing gate (NOVA)"
+    },
+    {
+     "effect": null,
+     "evidence": {
+      "evidence_claim_ids": [],
+      "evidence_claim_version": null,
+      "rule_version": null,
+      "status": "candidate"
+     },
+     "finding": "No red-tier or black-tier additive on the label.",
+     "rule_id": "grade.step3.no_capping_additive",
+     "source": "FSSAI. Food Safety and Standards (Food Products Standards and Food Additives) Regulations, 2011, as amended.",
+     "source_id": "FSSAI-ADDITIVES-2011",
+     "source_url": "https://www.fssai.gov.in/cms/food-safety-and-standards-regulations.php",
+     "step": 3,
+     "step_name": "Additives"
+    },
+    {
+     "effect": null,
+     "evidence": {
+      "evidence_claim_ids": [],
+      "evidence_claim_version": null,
+      "rule_version": null,
+      "status": "candidate"
+     },
+     "finding": "The product name does not promise a particular ingredient.",
+     "rule_id": "grade.step4.name_promises_nothing",
+     "source": "FSSAI. Food Safety and Standards (Labelling and Display) Regulations, 2020, and the subsequent front-of-pack nutrition labelling amendments.",
+     "source_id": "FSSAI-LABELLING-2020",
+     "source_url": "https://www.fssai.gov.in/cms/food-safety-and-standards-regulations.php",
+     "step": 4,
+     "step_name": "Named-ingredient integrity"
+    },
+    {
+     "effect": null,
+     "evidence": {
+      "evidence_claim_ids": [],
+      "evidence_claim_version": null,
+      "rule_version": null,
+      "status": "candidate"
+     },
+     "finding": "The label carried both an ingredient list and a nutrition panel.",
+     "rule_id": "grade.step5.sufficient",
+     "source": "GlamGenius product policy",
+     "source_id": null,
+     "source_url": null,
+     "step": 5,
+     "step_name": "Confidence"
+    }
+   ],
+   "value": {
+    "comparison": null,
+    "policy_version": "pack-mrp-value-v1",
+    "reason_key": "current_mrp_unavailable",
+    "status": "not_enough_information"
+   }
+  },
+  "purchase_check": {
+   "alternative": {
+    "candidate": {
+     "attribution": {
+      "license": "Open Database License (ODbL) v1.0",
+      "license_url": "https://opendatacommons.org/licenses/odbl/1-0/",
+      "source_url": "https://world.openfoodfacts.org/",
+      "text": "Contains information from Open Food Facts, made available under the Open Database License (ODbL)"
+     },
+     "barcode": "8901000000002",
+     "brand": "Sunfield",
+     "decision": "buy",
+     "grade": "B",
+     "product_name": "Sunfield Oats"
+    },
+    "reason_key": "comparable_option_found",
+    "status": "available"
+   },
+   "authorities": [
+    {
+     "action": "wait",
+     "authority": "product_result",
+     "reason_key": "processing",
+     "status": "applied"
+    },
+    {
+     "authority": "official_records",
+     "status": "physical_pack_required"
+    },
+    {
+     "authority": "label_change",
+     "effect": "context_only",
+     "status": "unavailable"
+    },
+    {
+     "authority": "ownership",
+     "effect": "context_only",
+     "status": "sign_in_required"
+    },
+    {
+     "authority": "decision_memory",
+     "effect": "context_only",
+     "status": "sign_in_required"
+    },
+    {
+     "authority": "alternative",
+     "effect": "context_only",
+     "status": "available"
+    }
+   ],
+   "boundary": null,
+   "context": {
+    "category": "packaged_food",
+    "kind": "scan",
+    "strategy": "scan_product"
+   },
+   "contract_version": "step-14-v1",
+   "decision": {
+    "decision_fingerprint": "b2f16d9da358046de8fea633029d47cf2c58c153bdb71f4986dc1ee0e5a61614",
+    "primary_reason_authority": "product_result",
+    "primary_reason_code": "processing",
+    "state": "decided",
+    "verdict": "wait"
+   },
+   "identity": {
+    "barcode": "8901000000001",
+    "content_fingerprint": "e108c9d73d710cd8ecfa85be9fce984f1baa7ba27816ae952574d73eeb1c5440",
+    "label_version": 1,
+    "physical_pack_context": false,
+    "reference_view": false,
+    "state": "exact"
+   },
+   "memory": {
+    "fidelity": "user_outcome_only",
+    "kind": "scan_decision",
+    "state": "sign_in_required"
+   },
+   "missing_information": [
+    "physical_pack"
+   ],
+   "ownership": {
+    "authority": "inventory_product_link",
+    "effect": "context_only",
+    "state": "sign_in_required"
+   },
+   "subject": null,
+   "value": {
+    "missing": [
+     "current_price"
+    ],
+    "state": "missing"
+   }
+  }
+ },
+ "graded_reference_mode": {
+  "product_result": {
+   "alternative": {
+    "candidate": {
+     "attribution": {
+      "license": "Open Database License (ODbL) v1.0",
+      "license_url": "https://opendatacommons.org/licenses/odbl/1-0/",
+      "source_url": "https://world.openfoodfacts.org/",
+      "text": "Contains information from Open Food Facts, made available under the Open Database License (ODbL)"
+     },
+     "band": "green",
+     "barcode": "8901000000002",
+     "brand": "Sunfield",
+     "comparison": {
+      "basis": "per_100g",
+      "candidate_grade": "B",
+      "category_match": "exact_source_taxonomy",
+      "category_source": "open_food_facts",
+      "current_grade": "C"
+     },
+     "decision": "buy",
+     "grade": "B",
+     "product_name": "Sunfield Oats"
+    },
+    "policy_version": "comparable-food-alternative-v1",
+    "reason_key": "comparable_option_found",
+    "status": "available"
+   },
+   "attribution": {
+    "license": "Open Database License (ODbL) v1.0",
+    "license_url": "https://opendatacommons.org/licenses/odbl/1-0/",
+    "source_url": "https://world.openfoodfacts.org/",
+    "text": "Contains information from Open Food Facts, made available under the Open Database License (ODbL)"
+   },
+   "band": "yellow",
+   "barcode": "8901000000001",
+   "basis": "solid",
+   "better_next_action": null,
+   "brand": "Northstar",
+   "community_observations": {
+    "active_window_days": 90,
+    "brand_reply_url": null,
+    "policy_version": "community-observations-v1",
+    "public_enabled": false,
+    "signals": []
+   },
+   "components": [
+    {
+     "band": "red",
+     "finding": "NOVA group 4. The ingredient list contains emulsifier.",
+     "key": "processing",
+     "rule": "Ceiling C. Nothing in the nutrition panel can lift a group 4 product above C.",
+     "source": "Monteiro CA, Cannon G, Levy RB, et al. Ultra-processed foods: what they are and how to identify them. Public Health Nutrition 22(5):936-941, 2019.",
+     "source_url": "https://doi.org/10.1017/S1368980018003762",
+     "sources": [
+      {
+       "identifier": "MONTEIRO-NOVA-2019",
+       "name": "Monteiro CA, Cannon G, Levy RB, et al. Ultra-processed foods: what they are and how to identify them. Public Health Nutrition 22(5):936-941, 2019.",
+       "publisher": "Public Health Nutrition (Cambridge University Press)",
+       "url": "https://doi.org/10.1017/S1368980018003762",
+       "version": "MONTEIRO-NOVA-2019"
+      }
+     ],
+     "state": "nova4"
+    },
+    {
+     "band": "green",
+     "exempt": [],
+     "finding": null,
+     "high": [],
+     "key": "nutrients",
+     "rule": null,
+     "source": null,
+     "source_url": null,
+     "sources": [],
+     "state": "clear"
+    },
+    {
+     "band": "green",
+     "finding": "No red-tier or black-tier additive on the label.",
+     "key": "additives",
+     "rule": null,
+     "source": "FSSAI. Food Safety and Standards (Food Products Standards and Food Additives) Regulations, 2011, as amended.",
+     "source_url": "https://www.fssai.gov.in/cms/food-safety-and-standards-regulations.php",
+     "sources": [
+      {
+       "identifier": "FSSAI-ADDITIVES-2011",
+       "name": "FSSAI. Food Safety and Standards (Food Products Standards and Food Additives) Regulations, 2011, as amended.",
+       "publisher": "FSSAI",
+       "url": "https://www.fssai.gov.in/cms/food-safety-and-standards-regulations.php",
+       "version": "FSSAI-ADDITIVES-2011"
+      }
+     ],
+     "state": "none"
+    },
+    {
+     "band": "green",
+     "declared_percent": null,
+     "finding": "The product name does not promise a particular ingredient.",
+     "ingredient": null,
+     "key": "naming",
+     "rule": null,
+     "source": "FSSAI. Food Safety and Standards (Labelling and Display) Regulations, 2020, and the subsequent front-of-pack nutrition labelling amendments.",
+     "source_url": "https://www.fssai.gov.in/cms/food-safety-and-standards-regulations.php",
+     "sources": [
+      {
+       "identifier": "FSSAI-LABELLING-2020",
+       "name": "FSSAI. Food Safety and Standards (Labelling and Display) Regulations, 2020, and the subsequent front-of-pack nutrition labelling amendments.",
+       "publisher": "FSSAI",
+       "url": "https://www.fssai.gov.in/cms/food-safety-and-standards-regulations.php",
+       "version": "FSSAI-LABELLING-2020"
+      }
+     ],
+     "state": "not_promised"
+    }
+   ],
+   "confidence": {
+    "level": "unverified",
+    "text": "From one source, not checked yet."
+   },
+   "decision": {
+    "action": "wait",
+    "reason_key": "processing"
+   },
+   "engine_version": "food-grade-v1",
+   "evidence": {
+    "ruleset_version": "v1",
+    "unpublished_rules": []
+   },
+   "facts_provenance": "confirmed_label_snapshot",
+   "grade": "C",
+   "helps": [
+    {
+     "band": "green",
+     "evidence": {
+      "evidence_claim_ids": [],
+      "evidence_claim_version": null,
+      "rule_version": null,
+      "status": "candidate"
+     },
+     "explanation": "declared_on_label",
+     "key": "protein",
+     "label": "protein",
+     "order": 60,
+     "quantity": {
+      "basis": "per_100_g",
+      "unit": "g",
+      "value": 7.0
+     },
+     "rule": null,
+     "sources": [],
+     "status": "declared"
+    },
+    {
+     "band": "green",
+     "evidence": {
+      "evidence_claim_ids": [],
+      "evidence_claim_version": null,
+      "rule_version": null,
+      "status": "candidate"
+     },
+     "explanation": "declared_on_label",
+     "key": "fibre",
+     "label": "fibre",
+     "order": 60,
+     "quantity": {
+      "basis": "per_100_g",
+      "unit": "g",
+      "value": 3.0
+     },
+     "rule": null,
+     "sources": [],
+     "status": "declared"
+    }
+   ],
+   "ingredients": [
+    {
+     "actions": {
+      "explain": false,
+      "report": true,
+      "source": false
+     },
+     "band": "green",
+     "description": null,
+     "detail": null,
+     "label": "maize",
+     "name": "maize",
+     "source": null,
+     "sources": [],
+     "status": "no_concern_found",
+     "tier": "plain",
+     "why_flagged": null
+    },
+    {
+     "actions": {
+      "explain": false,
+      "report": true,
+      "source": false
+     },
+     "band": "green",
+     "description": null,
+     "detail": null,
+     "label": "sugar",
+     "name": "sugar",
+     "source": null,
+     "sources": [],
+     "status": "no_concern_found",
+     "tier": "plain",
+     "why_flagged": null
+    },
+    {
+     "actions": {
+      "explain": false,
+      "report": true,
+      "source": false
+     },
+     "band": "green",
+     "description": null,
+     "detail": null,
+     "label": "salt",
+     "name": "salt",
+     "source": null,
+     "sources": [],
+     "status": "no_concern_found",
+     "tier": "plain",
+     "why_flagged": null
+    },
+    {
+     "actions": {
+      "explain": false,
+      "report": true,
+      "source": false
+     },
+     "band": "green",
+     "description": null,
+     "detail": null,
+     "label": "flavouring",
+     "name": "flavouring",
+     "source": null,
+     "sources": [],
+     "status": "no_concern_found",
+     "tier": "plain",
+     "why_flagged": null
+    },
+    {
+     "actions": {
+      "explain": true,
+      "report": true,
+      "source": true
+     },
+     "band": "green",
+     "description": "Keeps oil and water mixed.",
+     "detail": {
+      "authority_position": "FSSAI. Food Safety and Standards (Food Products Standards and Food Additives) Regulations, 2011, as amended.",
+      "evidence_status": "low",
+      "interpretation": null,
+      "rule": null,
+      "source": {
+       "identifier": "FSSAI-ADDITIVES-2011",
+       "name": "FSSAI. Food Safety and Standards (Food Products Standards and Food Additives) Regulations, 2011, as amended.",
+       "publisher": "FSSAI",
+       "url": "https://www.fssai.gov.in/cms/food-safety-and-standards-regulations.php",
+       "version": "FSSAI-ADDITIVES-2011"
+      },
+      "what_it_does": "Keeps oil and water mixed.",
+      "why_flagged": null
+     },
+     "label": "Lecithin · INS 322",
+     "name": "emulsifier (ins 322)",
+     "source": "FSSAI. Food Safety and Standards (Food Products Standards and Food Additives) Regulations, 2011, as amended.",
+     "sources": [
+      {
+       "identifier": "FSSAI-ADDITIVES-2011",
+       "name": "FSSAI. Food Safety and Standards (Food Products Standards and Food Additives) Regulations, 2011, as amended.",
+       "publisher": "FSSAI",
+       "url": "https://www.fssai.gov.in/cms/food-safety-and-standards-regulations.php",
+       "version": "FSSAI-ADDITIVES-2011"
+      }
+     ],
+     "status": "worth_knowing",
+     "tier": "green",
+     "why_flagged": null
+    }
+   ],
+   "label_change": {
+    "changed_fields": [],
+    "current_version": null,
+    "formula": {
+     "current_parse_status": null,
+     "only_on_current_label": [],
+     "only_on_previous_label": [],
+     "previous_parse_status": null,
+     "status": "not_applicable"
+    },
+    "previous_version": null,
+    "scope": "confirmed_label_history",
+    "status": "unavailable"
+   },
+   "label_version": {
+    "changed_fields": null,
+    "completeness": "complete_for_grading",
+    "content_fingerprint": "e108c9d73d710cd8ecfa85be9fce984f1baa7ba27816ae952574d73eeb1c5440",
+    "id": "<uuid>",
+    "observed_at": "<timestamp>",
+    "version_number": 1
+   },
+   "lowers": [
+    {
+     "band": "red",
+     "detail": {
+      "finding": "NOVA group 4. The ingredient list contains emulsifier.",
+      "nova_group": 4
+     },
+     "evidence": {
+      "evidence_claim_ids": [],
+      "evidence_claim_version": null,
+      "rule_version": "v1",
+      "status": "published"
+     },
+     "explanation": "highly_processed",
+     "key": "processing",
+     "label": "processing",
+     "order": 10,
+     "quantity": null,
+     "rule": "grade.step1.nova_4",
+     "sources": [
+      {
+       "identifier": "MONTEIRO-NOVA-2019",
+       "name": "Monteiro CA, Cannon G, Levy RB, et al. Ultra-processed foods: what they are and how to identify them. Public Health Nutrition 22(5):936-941, 2019.",
+       "publisher": "Public Health Nutrition (Cambridge University Press)",
+       "url": "https://doi.org/10.1017/S1368980018003762",
+       "version": "MONTEIRO-NOVA-2019"
+      }
+     ],
+     "status": "flagged"
+    }
+   ],
+   "missing": [],
+   "negatives": [
+    {
+     "band": "red",
+     "detail": {
+      "finding": "NOVA group 4. The ingredient list contains emulsifier.",
+      "nova_group": 4
+     },
+     "evidence": {
+      "evidence_claim_ids": [],
+      "evidence_claim_version": null,
+      "rule_version": "v1",
+      "status": "published"
+     },
+     "explanation": "highly_processed",
+     "key": "processing",
+     "label": "processing",
+     "order": 10,
+     "quantity": null,
+     "rule": "grade.step1.nova_4",
+     "sources": [
+      {
+       "identifier": "MONTEIRO-NOVA-2019",
+       "name": "Monteiro CA, Cannon G, Levy RB, et al. Ultra-processed foods: what they are and how to identify them. Public Health Nutrition 22(5):936-941, 2019.",
+       "publisher": "Public Health Nutrition (Cambridge University Press)",
+       "url": "https://doi.org/10.1017/S1368980018003762",
+       "version": "MONTEIRO-NOVA-2019"
+      }
+     ],
+     "status": "flagged"
+    }
+   ],
+   "nutrition": {
+    "protein_g": 7.0,
+    "salt_g": 0.5,
+    "total_fat_g": null,
+    "total_sugar_g": 8.0
+   },
+   "official_records": {
+    "authority": "FSSAI / FoSCoS",
+    "last_successful_check_at": null,
+    "record_type": "food_recall",
+    "records": [],
+    "source_url": "https://foscos.fssai.gov.in/food-recall"
+   },
+   "outcome": "graded",
+   "pack_size_g": 200.0,
+   "physical_pack_context": false,
+   "positives": [
+    {
+     "band": "green",
+     "evidence": {
+      "evidence_claim_ids": [],
+      "evidence_claim_version": null,
+      "rule_version": null,
+      "status": "candidate"
+     },
+     "explanation": "declared_on_label",
+     "key": "protein",
+     "label": "protein",
+     "order": 60,
+     "quantity": {
+      "basis": "per_100_g",
+      "unit": "g",
+      "value": 7.0
+     },
+     "rule": null,
+     "sources": [],
+     "status": "declared"
+    },
+    {
+     "band": "green",
+     "evidence": {
+      "evidence_claim_ids": [],
+      "evidence_claim_version": null,
+      "rule_version": null,
+      "status": "candidate"
+     },
+     "explanation": "declared_on_label",
+     "key": "fibre",
+     "label": "fibre",
+     "order": 60,
+     "quantity": {
+      "basis": "per_100_g",
+      "unit": "g",
+      "value": 3.0
+     },
+     "rule": null,
+     "sources": [],
+     "status": "declared"
+    }
+   ],
+   "product_name": "Northstar Corn Flakes",
+   "purity_note": null,
+   "quantity_guidance": null,
+   "result_contract_version": "v1",
+   "taxonomy": {
+    "category": "packaged_food",
+    "domain": "consumed",
+    "subcategory": "other_packaged_food"
+   },
+   "trace": [
+    {
+     "effect": null,
+     "evidence": {
+      "evidence_claim_ids": [],
+      "evidence_claim_version": null,
+      "rule_version": null,
+      "status": "candidate"
+     },
+     "finding": "This is a food, not something used to cook with.",
+     "rule_id": "grade.step0.not_a_culinary_ingredient",
+     "source": "GlamGenius culinary ingredient list",
+     "source_id": null,
+     "source_url": null,
+     "step": 0,
+     "step_name": "Culinary ingredient check"
+    },
+    {
+     "effect": "Ceiling C. Nothing in the nutrition panel can lift a group 4 product above C.",
+     "evidence": {
+      "evidence_claim_ids": [],
+      "evidence_claim_version": null,
+      "rule_version": "v1",
+      "status": "published"
+     },
+     "finding": "NOVA group 4. The ingredient list contains emulsifier.",
+     "rule_id": "grade.step1.nova_4",
+     "source": "Monteiro CA, Cannon G, Levy RB, et al. Ultra-processed foods: what they are and how to identify them. Public Health Nutrition 22(5):936-941, 2019.",
+     "source_id": "MONTEIRO-NOVA-2019",
+     "source_url": "https://doi.org/10.1017/S1368980018003762",
+     "step": 1,
+     "step_name": "Processing gate (NOVA)"
+    },
+    {
+     "effect": null,
+     "evidence": {
+      "evidence_claim_ids": [],
+      "evidence_claim_version": null,
+      "rule_version": null,
+      "status": "candidate"
+     },
+     "finding": "No red-tier or black-tier additive on the label.",
+     "rule_id": "grade.step3.no_capping_additive",
+     "source": "FSSAI. Food Safety and Standards (Food Products Standards and Food Additives) Regulations, 2011, as amended.",
+     "source_id": "FSSAI-ADDITIVES-2011",
+     "source_url": "https://www.fssai.gov.in/cms/food-safety-and-standards-regulations.php",
+     "step": 3,
+     "step_name": "Additives"
+    },
+    {
+     "effect": null,
+     "evidence": {
+      "evidence_claim_ids": [],
+      "evidence_claim_version": null,
+      "rule_version": null,
+      "status": "candidate"
+     },
+     "finding": "The product name does not promise a particular ingredient.",
+     "rule_id": "grade.step4.name_promises_nothing",
+     "source": "FSSAI. Food Safety and Standards (Labelling and Display) Regulations, 2020, and the subsequent front-of-pack nutrition labelling amendments.",
+     "source_id": "FSSAI-LABELLING-2020",
+     "source_url": "https://www.fssai.gov.in/cms/food-safety-and-standards-regulations.php",
+     "step": 4,
+     "step_name": "Named-ingredient integrity"
+    },
+    {
+     "effect": null,
+     "evidence": {
+      "evidence_claim_ids": [],
+      "evidence_claim_version": null,
+      "rule_version": null,
+      "status": "candidate"
+     },
+     "finding": "The label carried both an ingredient list and a nutrition panel.",
+     "rule_id": "grade.step5.sufficient",
+     "source": "GlamGenius product policy",
+     "source_id": null,
+     "source_url": null,
+     "step": 5,
+     "step_name": "Confidence"
+    }
+   ],
+   "value": {
+    "comparison": null,
+    "policy_version": "pack-mrp-value-v1",
+    "reason_key": "current_mrp_unavailable",
+    "status": "not_enough_information"
+   }
+  },
+  "purchase_check": {
+   "alternative": {
+    "candidate": {
+     "attribution": {
+      "license": "Open Database License (ODbL) v1.0",
+      "license_url": "https://opendatacommons.org/licenses/odbl/1-0/",
+      "source_url": "https://world.openfoodfacts.org/",
+      "text": "Contains information from Open Food Facts, made available under the Open Database License (ODbL)"
+     },
+     "barcode": "8901000000002",
+     "brand": "Sunfield",
+     "decision": "buy",
+     "grade": "B",
+     "product_name": "Sunfield Oats"
+    },
+    "reason_key": "comparable_option_found",
+    "status": "available"
+   },
+   "authorities": [
+    {
+     "action": "wait",
+     "authority": "product_result",
+     "reason_key": "processing",
+     "status": "applied"
+    },
+    {
+     "authority": "official_records",
+     "status": "reference_view"
+    },
+    {
+     "authority": "label_change",
+     "effect": "context_only",
+     "status": "unavailable"
+    },
+    {
+     "authority": "ownership",
+     "effect": "context_only",
+     "status": "sign_in_required"
+    },
+    {
+     "authority": "decision_memory",
+     "effect": "context_only",
+     "status": "sign_in_required"
+    },
+    {
+     "authority": "alternative",
+     "effect": "context_only",
+     "status": "available"
+    }
+   ],
+   "boundary": null,
+   "context": {
+    "category": "packaged_food",
+    "kind": "scan",
+    "strategy": "scan_product"
+   },
+   "contract_version": "step-14-v1",
+   "decision": {
+    "decision_fingerprint": "b2f16d9da358046de8fea633029d47cf2c58c153bdb71f4986dc1ee0e5a61614",
+    "primary_reason_authority": "product_result",
+    "primary_reason_code": "processing",
+    "state": "decided",
+    "verdict": "wait"
+   },
+   "identity": {
+    "barcode": "8901000000001",
+    "content_fingerprint": "e108c9d73d710cd8ecfa85be9fce984f1baa7ba27816ae952574d73eeb1c5440",
+    "label_version": 1,
+    "physical_pack_context": false,
+    "reference_view": true,
+    "state": "exact"
+   },
+   "memory": {
+    "fidelity": "user_outcome_only",
+    "kind": "scan_decision",
+    "state": "sign_in_required"
+   },
+   "missing_information": [],
+   "ownership": {
+    "authority": "inventory_product_link",
+    "effect": "context_only",
+    "state": "sign_in_required"
+   },
+   "subject": null,
+   "value": {
+    "missing": [
+     "current_price"
+    ],
+    "state": "missing"
+   }
+  }
+ },
+ "identity_only_label": {
+  "product_result": {
+   "alternative": {
+    "candidate": null,
+    "policy_version": "comparable-food-alternative-v1",
+    "reason_key": "current_product_has_no_published_grade",
+    "status": "not_enough_information"
+   },
+   "attribution": null,
+   "band": "yellow",
+   "barcode": "8901000000023",
+   "basis": "unknown",
+   "better_next_action": null,
+   "brand": "Label Brand",
+   "community_observations": {
+    "active_window_days": 90,
+    "brand_reply_url": null,
+    "policy_version": "community-observations-v1",
+    "public_enabled": false,
+    "signals": []
+   },
+   "components": [
+    {
+     "band": "green",
+     "finding": "NOVA group 1. Whole foods only; nothing has been added.",
+     "key": "processing",
+     "rule": "Ceiling A.",
+     "source": "Monteiro CA, Cannon G, Levy RB, et al. Ultra-processed foods: what they are and how to identify them. Public Health Nutrition 22(5):936-941, 2019.",
+     "source_url": "https://doi.org/10.1017/S1368980018003762",
+     "sources": [
+      {
+       "identifier": "MONTEIRO-NOVA-2019",
+       "name": "Monteiro CA, Cannon G, Levy RB, et al. Ultra-processed foods: what they are and how to identify them. Public Health Nutrition 22(5):936-941, 2019.",
+       "publisher": "Public Health Nutrition (Cambridge University Press)",
+       "url": "https://doi.org/10.1017/S1368980018003762",
+       "version": "MONTEIRO-NOVA-2019"
+      }
+     ],
+     "state": "nova1"
+    },
+    {
+     "band": "green",
+     "exempt": [],
+     "finding": null,
+     "high": [],
+     "key": "nutrients",
+     "rule": null,
+     "source": null,
+     "source_url": null,
+     "sources": [],
+     "state": "clear"
+    },
+    {
+     "band": "green",
+     "finding": "No red-tier or black-tier additive on the label.",
+     "key": "additives",
+     "rule": null,
+     "source": "FSSAI. Food Safety and Standards (Food Products Standards and Food Additives) Regulations, 2011, as amended.",
+     "source_url": "https://www.fssai.gov.in/cms/food-safety-and-standards-regulations.php",
+     "sources": [
+      {
+       "identifier": "FSSAI-ADDITIVES-2011",
+       "name": "FSSAI. Food Safety and Standards (Food Products Standards and Food Additives) Regulations, 2011, as amended.",
+       "publisher": "FSSAI",
+       "url": "https://www.fssai.gov.in/cms/food-safety-and-standards-regulations.php",
+       "version": "FSSAI-ADDITIVES-2011"
+      }
+     ],
+     "state": "none"
+    },
+    {
+     "band": "green",
+     "declared_percent": null,
+     "finding": "The product name does not promise a particular ingredient.",
+     "ingredient": null,
+     "key": "naming",
+     "rule": null,
+     "source": "FSSAI. Food Safety and Standards (Labelling and Display) Regulations, 2020, and the subsequent front-of-pack nutrition labelling amendments.",
+     "source_url": "https://www.fssai.gov.in/cms/food-safety-and-standards-regulations.php",
+     "sources": [
+      {
+       "identifier": "FSSAI-LABELLING-2020",
+       "name": "FSSAI. Food Safety and Standards (Labelling and Display) Regulations, 2020, and the subsequent front-of-pack nutrition labelling amendments.",
+       "publisher": "FSSAI",
+       "url": "https://www.fssai.gov.in/cms/food-safety-and-standards-regulations.php",
+       "version": "FSSAI-LABELLING-2020"
+      }
+     ],
+     "state": "not_promised"
+    }
+   ],
+   "confidence": {
+    "level": "unverified",
+    "text": "From one source, not checked yet."
+   },
+   "decision": {
+    "action": null,
+    "reason_key": "not_enough_information"
+   },
+   "engine_version": "food-grade-v1",
+   "evidence": {
+    "ruleset_version": "v1",
+    "unpublished_rules": []
+   },
+   "facts_provenance": "confirmed_label_snapshot",
+   "grade": null,
+   "helps": [
+    {
+     "band": "green",
+     "evidence": {
+      "evidence_claim_ids": [],
+      "evidence_claim_version": null,
+      "rule_version": null,
+      "status": "candidate"
+     },
+     "explanation": "lower_processing_group",
+     "key": "processing",
+     "label": "processing",
+     "order": 10,
+     "quantity": null,
+     "rule": null,
+     "sources": [],
+     "status": "no_concern_found"
+    }
+   ],
+   "ingredients": [],
+   "label_change": {
+    "changed_fields": [],
+    "current_version": null,
+    "formula": {
+     "current_parse_status": null,
+     "only_on_current_label": [],
+     "only_on_previous_label": [],
+     "previous_parse_status": null,
+     "status": "not_applicable"
+    },
+    "previous_version": null,
+    "scope": "confirmed_label_history",
+    "status": "unavailable"
+   },
+   "label_version": {
+    "changed_fields": null,
+    "completeness": "identity_only",
+    "content_fingerprint": "814bfe4b7917e768c5148e165ce3465ae30803ef77bdefedaac2726a8359645c",
+    "id": "<uuid>",
+    "observed_at": "<timestamp>",
+    "version_number": 1
+   },
+   "lowers": [],
+   "missing": [
+    "ingredient list",
+    "nutrition panel"
+   ],
+   "negatives": [],
+   "nutrition": {
+    "protein_g": null,
+    "salt_g": null,
+    "total_fat_g": null,
+    "total_sugar_g": null
+   },
+   "official_records": {
+    "authority": "FSSAI / FoSCoS",
+    "last_successful_check_at": null,
+    "record_type": "food_recall",
+    "records": [],
+    "source_url": "https://foscos.fssai.gov.in/food-recall"
+   },
+   "outcome": "not_enough_information",
+   "pack_size_g": null,
+   "physical_pack_context": false,
+   "positives": [
+    {
+     "band": "green",
+     "evidence": {
+      "evidence_claim_ids": [],
+      "evidence_claim_version": null,
+      "rule_version": null,
+      "status": "candidate"
+     },
+     "explanation": "lower_processing_group",
+     "key": "processing",
+     "label": "processing",
+     "order": 10,
+     "quantity": null,
+     "rule": null,
+     "sources": [],
+     "status": "no_concern_found"
+    }
+   ],
+   "product_name": "Name Only",
+   "purity_note": null,
+   "quantity_guidance": null,
+   "result_contract_version": "v1",
+   "taxonomy": {
+    "category": "packaged_food",
+    "domain": "consumed",
+    "subcategory": "other_packaged_food"
+   },
+   "trace": [
+    {
+     "effect": null,
+     "evidence": {
+      "evidence_claim_ids": [],
+      "evidence_claim_version": null,
+      "rule_version": null,
+      "status": "candidate"
+     },
+     "finding": "This is a food, not something used to cook with.",
+     "rule_id": "grade.step0.not_a_culinary_ingredient",
+     "source": "GlamGenius culinary ingredient list",
+     "source_id": null,
+     "source_url": null,
+     "step": 0,
+     "step_name": "Culinary ingredient check"
+    },
+    {
+     "effect": "Ceiling A.",
+     "evidence": {
+      "evidence_claim_ids": [],
+      "evidence_claim_version": null,
+      "rule_version": "v1",
+      "status": "published"
+     },
+     "finding": "NOVA group 1. Whole foods only; nothing has been added.",
+     "rule_id": "grade.step1.nova_1",
+     "source": "Monteiro CA, Cannon G, Levy RB, et al. Ultra-processed foods: what they are and how to identify them. Public Health Nutrition 22(5):936-941, 2019.",
+     "source_id": "MONTEIRO-NOVA-2019",
+     "source_url": "https://doi.org/10.1017/S1368980018003762",
+     "step": 1,
+     "step_name": "Processing gate (NOVA)"
+    },
+    {
+     "effect": null,
+     "evidence": {
+      "evidence_claim_ids": [],
+      "evidence_claim_version": null,
+      "rule_version": null,
+      "status": "candidate"
+     },
+     "finding": "No red-tier or black-tier additive on the label.",
+     "rule_id": "grade.step3.no_capping_additive",
+     "source": "FSSAI. Food Safety and Standards (Food Products Standards and Food Additives) Regulations, 2011, as amended.",
+     "source_id": "FSSAI-ADDITIVES-2011",
+     "source_url": "https://www.fssai.gov.in/cms/food-safety-and-standards-regulations.php",
+     "step": 3,
+     "step_name": "Additives"
+    },
+    {
+     "effect": null,
+     "evidence": {
+      "evidence_claim_ids": [],
+      "evidence_claim_version": null,
+      "rule_version": null,
+      "status": "candidate"
+     },
+     "finding": "The product name does not promise a particular ingredient.",
+     "rule_id": "grade.step4.name_promises_nothing",
+     "source": "FSSAI. Food Safety and Standards (Labelling and Display) Regulations, 2020, and the subsequent front-of-pack nutrition labelling amendments.",
+     "source_id": "FSSAI-LABELLING-2020",
+     "source_url": "https://www.fssai.gov.in/cms/food-safety-and-standards-regulations.php",
+     "step": 4,
+     "step_name": "Named-ingredient integrity"
+    },
+    {
+     "effect": "NOT_ENOUGH_INFORMATION. No grade is shown.",
+     "evidence": {
+      "evidence_claim_ids": [],
+      "evidence_claim_version": null,
+      "rule_version": null,
+      "status": "candidate"
+     },
+     "finding": "The label is missing its ingredient list and its nutrition panel.",
+     "rule_id": "grade.step5.not_enough_information",
+     "source": "GlamGenius product policy",
+     "source_id": null,
+     "source_url": null,
+     "step": 5,
+     "step_name": "Confidence"
+    }
+   ],
+   "value": {
+    "comparison": null,
+    "policy_version": "pack-mrp-value-v1",
+    "reason_key": "no_comparable_alternative",
+    "status": "not_enough_information"
+   }
+  },
+  "purchase_check": {
+   "alternative": {
+    "candidate": null,
+    "reason_key": "current_product_has_no_published_grade",
+    "status": "not_enough_information"
+   },
+   "authorities": [
+    {
+     "action": null,
+     "authority": "product_result",
+     "reason_key": "not_enough_information",
+     "status": "not_enough_information"
+    },
+    {
+     "authority": "official_records",
+     "status": "physical_pack_required"
+    },
+    {
+     "authority": "label_change",
+     "effect": "context_only",
+     "status": "unavailable"
+    },
+    {
+     "authority": "ownership",
+     "effect": "context_only",
+     "status": "sign_in_required"
+    },
+    {
+     "authority": "decision_memory",
+     "effect": "context_only",
+     "status": "sign_in_required"
+    },
+    {
+     "authority": "alternative",
+     "effect": "context_only",
+     "status": "not_enough_information"
+    }
+   ],
+   "boundary": null,
+   "context": {
+    "category": "packaged_food",
+    "kind": "scan",
+    "strategy": "scan_product"
+   },
+   "contract_version": "step-14-v1",
+   "decision": {
+    "decision_fingerprint": "5b0c42fae56ef588cca8bab22f73c194a1feae3356d107ebe81f055fb0b5ae33",
+    "primary_reason_authority": "product_result",
+    "primary_reason_code": "not_enough_information",
+    "state": "not_enough_information",
+    "verdict": null
+   },
+   "identity": {
+    "barcode": "8901000000023",
+    "content_fingerprint": "814bfe4b7917e768c5148e165ce3465ae30803ef77bdefedaac2726a8359645c",
+    "label_version": 1,
+    "physical_pack_context": false,
+    "reference_view": false,
+    "state": "exact"
+   },
+   "memory": {
+    "fidelity": "user_outcome_only",
+    "kind": "scan_decision",
+    "state": "sign_in_required"
+   },
+   "missing_information": [
+    "ingredient list",
+    "nutrition panel",
+    "physical_pack"
+   ],
+   "ownership": {
+    "authority": "inventory_product_link",
+    "effect": "context_only",
+    "state": "sign_in_required"
+   },
+   "subject": null,
+   "value": {
+    "missing": [
+     "current_price"
+    ],
+    "state": "missing"
+   }
+  }
+ },
+ "off_only": {
+  "product_result": {
+   "alternative": {
+    "candidate": null,
+    "policy_version": "comparable-food-alternative-v1",
+    "reason_key": "current_product_has_no_published_grade",
+    "status": "not_enough_information"
+   },
+   "attribution": {
+    "license": "Open Database License (ODbL) v1.0",
+    "license_url": "https://opendatacommons.org/licenses/odbl/1-0/",
+    "source_url": "https://world.openfoodfacts.org/",
+    "text": "Contains information from Open Food Facts, made available under the Open Database License (ODbL)"
+   },
+   "band": "yellow",
+   "barcode": "8901000000021",
+   "basis": "solid",
+   "better_next_action": null,
+   "brand": "Catalogue Brand",
+   "community_observations": {
+    "active_window_days": 90,
+    "brand_reply_url": null,
+    "policy_version": "community-observations-v1",
+    "public_enabled": false,
+    "signals": []
+   },
+   "components": [
+    {
+     "band": "yellow",
+     "finding": "NOVA group 3. A whole food with salt added.",
+     "key": "processing",
+     "rule": "Ceiling B.",
+     "source": "Monteiro CA, Cannon G, Levy RB, et al. Ultra-processed foods: what they are and how to identify them. Public Health Nutrition 22(5):936-941, 2019.",
+     "source_url": "https://doi.org/10.1017/S1368980018003762",
+     "sources": [
+      {
+       "identifier": "MONTEIRO-NOVA-2019",
+       "name": "Monteiro CA, Cannon G, Levy RB, et al. Ultra-processed foods: what they are and how to identify them. Public Health Nutrition 22(5):936-941, 2019.",
+       "publisher": "Public Health Nutrition (Cambridge University Press)",
+       "url": "https://doi.org/10.1017/S1368980018003762",
+       "version": "MONTEIRO-NOVA-2019"
+      }
+     ],
+     "state": "nova3"
+    },
+    {
+     "band": "green",
+     "exempt": [],
+     "finding": null,
+     "high": [],
+     "key": "nutrients",
+     "rule": null,
+     "source": null,
+     "source_url": null,
+     "sources": [],
+     "state": "clear"
+    },
+    {
+     "band": "green",
+     "finding": "No red-tier or black-tier additive on the label.",
+     "key": "additives",
+     "rule": null,
+     "source": "FSSAI. Food Safety and Standards (Food Products Standards and Food Additives) Regulations, 2011, as amended.",
+     "source_url": "https://www.fssai.gov.in/cms/food-safety-and-standards-regulations.php",
+     "sources": [
+      {
+       "identifier": "FSSAI-ADDITIVES-2011",
+       "name": "FSSAI. Food Safety and Standards (Food Products Standards and Food Additives) Regulations, 2011, as amended.",
+       "publisher": "FSSAI",
+       "url": "https://www.fssai.gov.in/cms/food-safety-and-standards-regulations.php",
+       "version": "FSSAI-ADDITIVES-2011"
+      }
+     ],
+     "state": "none"
+    },
+    {
+     "band": "green",
+     "declared_percent": null,
+     "finding": "The product name does not promise a particular ingredient.",
+     "ingredient": null,
+     "key": "naming",
+     "rule": null,
+     "source": "FSSAI. Food Safety and Standards (Labelling and Display) Regulations, 2020, and the subsequent front-of-pack nutrition labelling amendments.",
+     "source_url": "https://www.fssai.gov.in/cms/food-safety-and-standards-regulations.php",
+     "sources": [
+      {
+       "identifier": "FSSAI-LABELLING-2020",
+       "name": "FSSAI. Food Safety and Standards (Labelling and Display) Regulations, 2020, and the subsequent front-of-pack nutrition labelling amendments.",
+       "publisher": "FSSAI",
+       "url": "https://www.fssai.gov.in/cms/food-safety-and-standards-regulations.php",
+       "version": "FSSAI-LABELLING-2020"
+      }
+     ],
+     "state": "not_promised"
+    }
+   ],
+   "confidence": {
+    "level": "unverified",
+    "text": "From one source, not checked yet."
+   },
+   "decision": {
+    "action": null,
+    "reason_key": "processing"
+   },
+   "engine_version": "food-grade-v1",
+   "evidence": {
+    "ruleset_version": "v1",
+    "unpublished_rules": []
+   },
+   "facts_provenance": "open_food_facts",
+   "grade": null,
+   "helps": [],
+   "ingredients": [
+    {
+     "actions": {
+      "explain": false,
+      "report": true,
+      "source": false
+     },
+     "band": "green",
+     "description": null,
+     "detail": null,
+     "label": "whole grain oats",
+     "name": "whole grain oats",
+     "source": null,
+     "sources": [],
+     "status": "no_concern_found",
+     "tier": "plain",
+     "why_flagged": null
+    },
+    {
+     "actions": {
+      "explain": false,
+      "report": true,
+      "source": false
+     },
+     "band": "green",
+     "description": null,
+     "detail": null,
+     "label": "salt",
+     "name": "salt",
+     "source": null,
+     "sources": [],
+     "status": "no_concern_found",
+     "tier": "plain",
+     "why_flagged": null
+    }
+   ],
+   "label_change": null,
+   "label_version": null,
+   "lowers": [
+    {
+     "band": "green",
+     "detail": {
+      "finding": "NOVA group 3. A whole food with salt added.",
+      "nova_group": 3
+     },
+     "evidence": {
+      "evidence_claim_ids": [],
+      "evidence_claim_version": null,
+      "rule_version": "v1",
+      "status": "published"
+     },
+     "explanation": "processed",
+     "key": "processing",
+     "label": "processing",
+     "order": 10,
+     "quantity": null,
+     "rule": "grade.step1.nova_3",
+     "sources": [
+      {
+       "identifier": "MONTEIRO-NOVA-2019",
+       "name": "Monteiro CA, Cannon G, Levy RB, et al. Ultra-processed foods: what they are and how to identify them. Public Health Nutrition 22(5):936-941, 2019.",
+       "publisher": "Public Health Nutrition (Cambridge University Press)",
+       "url": "https://doi.org/10.1017/S1368980018003762",
+       "version": "MONTEIRO-NOVA-2019"
+      }
+     ],
+     "status": "worth_knowing"
+    }
+   ],
+   "missing": [
+    "nutrition panel"
+   ],
+   "negatives": [
+    {
+     "band": "green",
+     "detail": {
+      "finding": "NOVA group 3. A whole food with salt added.",
+      "nova_group": 3
+     },
+     "evidence": {
+      "evidence_claim_ids": [],
+      "evidence_claim_version": null,
+      "rule_version": "v1",
+      "status": "published"
+     },
+     "explanation": "processed",
+     "key": "processing",
+     "label": "processing",
+     "order": 10,
+     "quantity": null,
+     "rule": "grade.step1.nova_3",
+     "sources": [
+      {
+       "identifier": "MONTEIRO-NOVA-2019",
+       "name": "Monteiro CA, Cannon G, Levy RB, et al. Ultra-processed foods: what they are and how to identify them. Public Health Nutrition 22(5):936-941, 2019.",
+       "publisher": "Public Health Nutrition (Cambridge University Press)",
+       "url": "https://doi.org/10.1017/S1368980018003762",
+       "version": "MONTEIRO-NOVA-2019"
+      }
+     ],
+     "status": "worth_knowing"
+    }
+   ],
+   "nutrition": {
+    "protein_g": null,
+    "salt_g": null,
+    "total_fat_g": null,
+    "total_sugar_g": null
+   },
+   "official_records": {
+    "authority": "FSSAI / FoSCoS",
+    "last_successful_check_at": null,
+    "record_type": "food_recall",
+    "records": [],
+    "source_url": "https://foscos.fssai.gov.in/food-recall"
+   },
+   "outcome": "not_enough_information",
+   "pack_size_g": 200.0,
+   "physical_pack_context": false,
+   "positives": [],
+   "product_name": "Catalogue Only",
+   "purity_note": null,
+   "quantity_guidance": null,
+   "result_contract_version": "v1",
+   "taxonomy": {
+    "category": "packaged_food",
+    "domain": "consumed",
+    "subcategory": "cereal"
+   },
+   "trace": [
+    {
+     "effect": null,
+     "evidence": {
+      "evidence_claim_ids": [],
+      "evidence_claim_version": null,
+      "rule_version": null,
+      "status": "candidate"
+     },
+     "finding": "This is a food, not something used to cook with.",
+     "rule_id": "grade.step0.not_a_culinary_ingredient",
+     "source": "GlamGenius culinary ingredient list",
+     "source_id": null,
+     "source_url": null,
+     "step": 0,
+     "step_name": "Culinary ingredient check"
+    },
+    {
+     "effect": "Ceiling B.",
+     "evidence": {
+      "evidence_claim_ids": [],
+      "evidence_claim_version": null,
+      "rule_version": "v1",
+      "status": "published"
+     },
+     "finding": "NOVA group 3. A whole food with salt added.",
+     "rule_id": "grade.step1.nova_3",
+     "source": "Monteiro CA, Cannon G, Levy RB, et al. Ultra-processed foods: what they are and how to identify them. Public Health Nutrition 22(5):936-941, 2019.",
+     "source_id": "MONTEIRO-NOVA-2019",
+     "source_url": "https://doi.org/10.1017/S1368980018003762",
+     "step": 1,
+     "step_name": "Processing gate (NOVA)"
+    },
+    {
+     "effect": null,
+     "evidence": {
+      "evidence_claim_ids": [],
+      "evidence_claim_version": null,
+      "rule_version": null,
+      "status": "candidate"
+     },
+     "finding": "No red-tier or black-tier additive on the label.",
+     "rule_id": "grade.step3.no_capping_additive",
+     "source": "FSSAI. Food Safety and Standards (Food Products Standards and Food Additives) Regulations, 2011, as amended.",
+     "source_id": "FSSAI-ADDITIVES-2011",
+     "source_url": "https://www.fssai.gov.in/cms/food-safety-and-standards-regulations.php",
+     "step": 3,
+     "step_name": "Additives"
+    },
+    {
+     "effect": null,
+     "evidence": {
+      "evidence_claim_ids": [],
+      "evidence_claim_version": null,
+      "rule_version": null,
+      "status": "candidate"
+     },
+     "finding": "The product name does not promise a particular ingredient.",
+     "rule_id": "grade.step4.name_promises_nothing",
+     "source": "FSSAI. Food Safety and Standards (Labelling and Display) Regulations, 2020, and the subsequent front-of-pack nutrition labelling amendments.",
+     "source_id": "FSSAI-LABELLING-2020",
+     "source_url": "https://www.fssai.gov.in/cms/food-safety-and-standards-regulations.php",
+     "step": 4,
+     "step_name": "Named-ingredient integrity"
+    },
+    {
+     "effect": "NOT_ENOUGH_INFORMATION. No grade is shown.",
+     "evidence": {
+      "evidence_claim_ids": [],
+      "evidence_claim_version": null,
+      "rule_version": null,
+      "status": "candidate"
+     },
+     "finding": "The label is missing its nutrition panel.",
+     "rule_id": "grade.step5.not_enough_information",
+     "source": "GlamGenius product policy",
+     "source_id": null,
+     "source_url": null,
+     "step": 5,
+     "step_name": "Confidence"
+    }
+   ],
+   "value": {
+    "comparison": null,
+    "policy_version": "pack-mrp-value-v1",
+    "reason_key": "no_comparable_alternative",
+    "status": "not_enough_information"
+   }
+  },
+  "purchase_check": {
+   "alternative": {
+    "candidate": null,
+    "reason_key": "current_product_has_no_published_grade",
+    "status": "not_enough_information"
+   },
+   "authorities": [
+    {
+     "action": null,
+     "authority": "product_result",
+     "reason_key": "processing",
+     "status": "not_enough_information"
+    },
+    {
+     "authority": "official_records",
+     "status": "identity_insufficient"
+    },
+    {
+     "authority": "label_change",
+     "effect": "context_only",
+     "status": "no_confirmed_label"
+    },
+    {
+     "authority": "ownership",
+     "effect": "context_only",
+     "status": "sign_in_required"
+    },
+    {
+     "authority": "decision_memory",
+     "effect": "context_only",
+     "status": "sign_in_required"
+    },
+    {
+     "authority": "alternative",
+     "effect": "context_only",
+     "status": "not_enough_information"
+    }
+   ],
+   "boundary": null,
+   "context": {
+    "category": "packaged_food",
+    "kind": "scan",
+    "strategy": "scan_product"
+   },
+   "contract_version": "step-14-v1",
+   "decision": {
+    "decision_fingerprint": "c557fc6de483d02c1358fff9c7fe7a5014ade28d5c9930d8ffa37c1eb9417710",
+    "primary_reason_authority": "purchase_os",
+    "primary_reason_code": "identity_insufficient",
+    "state": "not_enough_information",
+    "verdict": null
+   },
+   "identity": {
+    "barcode": "8901000000021",
+    "content_fingerprint": null,
+    "label_version": null,
+    "physical_pack_context": false,
+    "reference_view": false,
+    "state": "insufficient"
+   },
+   "memory": {
+    "fidelity": "user_outcome_only",
+    "kind": "scan_decision",
+    "state": "sign_in_required"
+   },
+   "missing_information": [
+    "exact_label_version",
+    "nutrition panel"
+   ],
+   "ownership": {
+    "authority": "inventory_product_link",
+    "effect": "context_only",
+    "state": "sign_in_required"
+   },
+   "subject": null,
+   "value": {
+    "missing": [
+     "current_price"
+    ],
+    "state": "missing"
+   }
+  }
+ },
+ "own_pack_physical": {
+  "product_result": {
+   "alternative": {
+    "candidate": null,
+    "policy_version": "comparable-food-alternative-v1",
+    "reason_key": "no_source_category_for_this_product",
+    "status": "not_enough_information"
+   },
+   "attribution": null,
+   "band": "green",
+   "barcode": "8901000000020",
+   "basis": "solid",
+   "better_next_action": null,
+   "brand": "Sunfield",
+   "community_observations": {
+    "active_window_days": 90,
+    "brand_reply_url": null,
+    "policy_version": "community-observations-v1",
+    "public_enabled": false,
+    "signals": []
+   },
+   "components": [
+    {
+     "band": "green",
+     "finding": "NOVA group 1. Whole foods only; nothing has been added.",
+     "key": "processing",
+     "rule": "Ceiling A.",
+     "source": "Monteiro CA, Cannon G, Levy RB, et al. Ultra-processed foods: what they are and how to identify them. Public Health Nutrition 22(5):936-941, 2019.",
+     "source_url": "https://doi.org/10.1017/S1368980018003762",
+     "sources": [
+      {
+       "identifier": "MONTEIRO-NOVA-2019",
+       "name": "Monteiro CA, Cannon G, Levy RB, et al. Ultra-processed foods: what they are and how to identify them. Public Health Nutrition 22(5):936-941, 2019.",
+       "publisher": "Public Health Nutrition (Cambridge University Press)",
+       "url": "https://doi.org/10.1017/S1368980018003762",
+       "version": "MONTEIRO-NOVA-2019"
+      }
+     ],
+     "state": "nova1"
+    },
+    {
+     "band": "green",
+     "exempt": [],
+     "finding": "Saturated fat is 1.2 g per 100 g and comes from the whole food itself.",
+     "high": [],
+     "key": "nutrients",
+     "rule": "No penalty. Saturated fat is only penalised at NOVA 3 and 4.",
+     "source": "GlamGenius product policy",
+     "source_url": null,
+     "sources": [],
+     "state": "clear"
+    },
+    {
+     "band": "green",
+     "finding": "No red-tier or black-tier additive on the label.",
+     "key": "additives",
+     "rule": null,
+     "source": "FSSAI. Food Safety and Standards (Food Products Standards and Food Additives) Regulations, 2011, as amended.",
+     "source_url": "https://www.fssai.gov.in/cms/food-safety-and-standards-regulations.php",
+     "sources": [
+      {
+       "identifier": "FSSAI-ADDITIVES-2011",
+       "name": "FSSAI. Food Safety and Standards (Food Products Standards and Food Additives) Regulations, 2011, as amended.",
+       "publisher": "FSSAI",
+       "url": "https://www.fssai.gov.in/cms/food-safety-and-standards-regulations.php",
+       "version": "FSSAI-ADDITIVES-2011"
+      }
+     ],
+     "state": "none"
+    },
+    {
+     "band": "green",
+     "declared_percent": null,
+     "finding": "The product name does not promise a particular ingredient.",
+     "ingredient": null,
+     "key": "naming",
+     "rule": null,
+     "source": "FSSAI. Food Safety and Standards (Labelling and Display) Regulations, 2020, and the subsequent front-of-pack nutrition labelling amendments.",
+     "source_url": "https://www.fssai.gov.in/cms/food-safety-and-standards-regulations.php",
+     "sources": [
+      {
+       "identifier": "FSSAI-LABELLING-2020",
+       "name": "FSSAI. Food Safety and Standards (Labelling and Display) Regulations, 2020, and the subsequent front-of-pack nutrition labelling amendments.",
+       "publisher": "FSSAI",
+       "url": "https://www.fssai.gov.in/cms/food-safety-and-standards-regulations.php",
+       "version": "FSSAI-LABELLING-2020"
+      }
+     ],
+     "state": "not_promised"
+    }
+   ],
+   "confidence": {
+    "level": "unverified",
+    "text": "From one source, not checked yet."
+   },
+   "decision": {
+    "action": "buy",
+    "reason_key": "label_facts"
+   },
+   "engine_version": "food-grade-v1",
+   "evidence": {
+    "ruleset_version": "v1",
+    "unpublished_rules": []
+   },
+   "facts_provenance": "confirmed_label_snapshot",
+   "grade": "A",
+   "helps": [
+    {
+     "band": "green",
+     "evidence": {
+      "evidence_claim_ids": [],
+      "evidence_claim_version": null,
+      "rule_version": null,
+      "status": "candidate"
+     },
+     "explanation": "declared_on_label",
+     "key": "protein",
+     "label": "protein",
+     "order": 60,
+     "quantity": {
+      "basis": "per_100_g",
+      "unit": "g",
+      "value": 13.0
+     },
+     "rule": null,
+     "sources": [],
+     "status": "declared"
+    },
+    {
+     "band": "green",
+     "evidence": {
+      "evidence_claim_ids": [],
+      "evidence_claim_version": null,
+      "rule_version": null,
+      "status": "candidate"
+     },
+     "explanation": "declared_on_label",
+     "key": "fibre",
+     "label": "fibre",
+     "order": 60,
+     "quantity": {
+      "basis": "per_100_g",
+      "unit": "g",
+      "value": 10.0
+     },
+     "rule": null,
+     "sources": [],
+     "status": "declared"
+    },
+    {
+     "band": "green",
+     "evidence": {
+      "evidence_claim_ids": [],
+      "evidence_claim_version": null,
+      "rule_version": null,
+      "status": "candidate"
+     },
+     "explanation": "lower_processing_group",
+     "key": "processing",
+     "label": "processing",
+     "order": 10,
+     "quantity": null,
+     "rule": null,
+     "sources": [],
+     "status": "no_concern_found"
+    }
+   ],
+   "ingredients": [
+    {
+     "actions": {
+      "explain": false,
+      "report": true,
+      "source": false
+     },
+     "band": "green",
+     "description": null,
+     "detail": null,
+     "label": "whole grain oats",
+     "name": "whole grain oats",
+     "source": null,
+     "sources": [],
+     "status": "no_concern_found",
+     "tier": "plain",
+     "why_flagged": null
+    }
+   ],
+   "label_change": {
+    "changed_fields": [],
+    "current_version": null,
+    "formula": {
+     "current_parse_status": null,
+     "only_on_current_label": [],
+     "only_on_previous_label": [],
+     "previous_parse_status": null,
+     "status": "not_applicable"
+    },
+    "previous_version": null,
+    "scope": "confirmed_label_history",
+    "status": "unavailable"
+   },
+   "label_version": {
+    "changed_fields": null,
+    "completeness": "complete_for_grading",
+    "content_fingerprint": "11b3796939e2181adc60052647ff9785ba4e17a4c713653665f7245739b8e14f",
+    "id": "<uuid>",
+    "observed_at": "<timestamp>",
+    "version_number": 1
+   },
+   "lowers": [],
+   "missing": [],
+   "negatives": [],
+   "nutrition": {
+    "protein_g": 13.0,
+    "salt_g": 0.02,
+    "total_fat_g": null,
+    "total_sugar_g": 1.0
+   },
+   "official_records": {
+    "authority": "FSSAI / FoSCoS",
+    "last_successful_check_at": null,
+    "record_type": "food_recall",
+    "records": [],
+    "source_url": "https://foscos.fssai.gov.in/food-recall"
+   },
+   "outcome": "graded",
+   "pack_size_g": 200.0,
+   "physical_pack_context": true,
+   "positives": [
+    {
+     "band": "green",
+     "evidence": {
+      "evidence_claim_ids": [],
+      "evidence_claim_version": null,
+      "rule_version": null,
+      "status": "candidate"
+     },
+     "explanation": "declared_on_label",
+     "key": "protein",
+     "label": "protein",
+     "order": 60,
+     "quantity": {
+      "basis": "per_100_g",
+      "unit": "g",
+      "value": 13.0
+     },
+     "rule": null,
+     "sources": [],
+     "status": "declared"
+    },
+    {
+     "band": "green",
+     "evidence": {
+      "evidence_claim_ids": [],
+      "evidence_claim_version": null,
+      "rule_version": null,
+      "status": "candidate"
+     },
+     "explanation": "declared_on_label",
+     "key": "fibre",
+     "label": "fibre",
+     "order": 60,
+     "quantity": {
+      "basis": "per_100_g",
+      "unit": "g",
+      "value": 10.0
+     },
+     "rule": null,
+     "sources": [],
+     "status": "declared"
+    },
+    {
+     "band": "green",
+     "evidence": {
+      "evidence_claim_ids": [],
+      "evidence_claim_version": null,
+      "rule_version": null,
+      "status": "candidate"
+     },
+     "explanation": "lower_processing_group",
+     "key": "processing",
+     "label": "processing",
+     "order": 10,
+     "quantity": null,
+     "rule": null,
+     "sources": [],
+     "status": "no_concern_found"
+    }
+   ],
+   "product_name": "Own Pack Oats",
+   "purity_note": null,
+   "quantity_guidance": null,
+   "result_contract_version": "v1",
+   "taxonomy": {
+    "category": "packaged_food",
+    "domain": "consumed",
+    "subcategory": "other_packaged_food"
+   },
+   "trace": [
+    {
+     "effect": null,
+     "evidence": {
+      "evidence_claim_ids": [],
+      "evidence_claim_version": null,
+      "rule_version": null,
+      "status": "candidate"
+     },
+     "finding": "This is a food, not something used to cook with.",
+     "rule_id": "grade.step0.not_a_culinary_ingredient",
+     "source": "GlamGenius culinary ingredient list",
+     "source_id": null,
+     "source_url": null,
+     "step": 0,
+     "step_name": "Culinary ingredient check"
+    },
+    {
+     "effect": "Ceiling A.",
+     "evidence": {
+      "evidence_claim_ids": [],
+      "evidence_claim_version": null,
+      "rule_version": "v1",
+      "status": "published"
+     },
+     "finding": "NOVA group 1. Whole foods only; nothing has been added.",
+     "rule_id": "grade.step1.nova_1",
+     "source": "Monteiro CA, Cannon G, Levy RB, et al. Ultra-processed foods: what they are and how to identify them. Public Health Nutrition 22(5):936-941, 2019.",
+     "source_id": "MONTEIRO-NOVA-2019",
+     "source_url": "https://doi.org/10.1017/S1368980018003762",
+     "step": 1,
+     "step_name": "Processing gate (NOVA)"
+    },
+    {
+     "effect": "No penalty. Saturated fat is only penalised at NOVA 3 and 4.",
+     "evidence": {
+      "evidence_claim_ids": [],
+      "evidence_claim_version": null,
+      "rule_version": null,
+      "status": "candidate"
+     },
+     "finding": "Saturated fat is 1.2 g per 100 g and comes from the whole food itself.",
+     "rule_id": "grade.step2.saturated_fat_not_penalised",
+     "source": "GlamGenius product policy",
+     "source_id": null,
+     "source_url": null,
+     "step": 2,
+     "step_name": "Nutrient bands"
+    },
+    {
+     "effect": "2 or more can cancel one ordinary penalty, never a severe one, and never lift past the ceiling.",
+     "evidence": {
+      "evidence_claim_ids": [],
+      "evidence_claim_version": null,
+      "rule_version": null,
+      "status": "candidate"
+     },
+     "finding": "Positives: fibre 10 g, protein 13 g.",
+     "rule_id": "grade.step2.positives",
+     "source": "GlamGenius product policy",
+     "source_id": null,
+     "source_url": null,
+     "step": 2,
+     "step_name": "Nutrient bands"
+    },
+    {
+     "effect": null,
+     "evidence": {
+      "evidence_claim_ids": [],
+      "evidence_claim_version": null,
+      "rule_version": null,
+      "status": "candidate"
+     },
+     "finding": "No red-tier or black-tier additive on the label.",
+     "rule_id": "grade.step3.no_capping_additive",
+     "source": "FSSAI. Food Safety and Standards (Food Products Standards and Food Additives) Regulations, 2011, as amended.",
+     "source_id": "FSSAI-ADDITIVES-2011",
+     "source_url": "https://www.fssai.gov.in/cms/food-safety-and-standards-regulations.php",
+     "step": 3,
+     "step_name": "Additives"
+    },
+    {
+     "effect": null,
+     "evidence": {
+      "evidence_claim_ids": [],
+      "evidence_claim_version": null,
+      "rule_version": null,
+      "status": "candidate"
+     },
+     "finding": "The product name does not promise a particular ingredient.",
+     "rule_id": "grade.step4.name_promises_nothing",
+     "source": "FSSAI. Food Safety and Standards (Labelling and Display) Regulations, 2020, and the subsequent front-of-pack nutrition labelling amendments.",
+     "source_id": "FSSAI-LABELLING-2020",
+     "source_url": "https://www.fssai.gov.in/cms/food-safety-and-standards-regulations.php",
+     "step": 4,
+     "step_name": "Named-ingredient integrity"
+    },
+    {
+     "effect": null,
+     "evidence": {
+      "evidence_claim_ids": [],
+      "evidence_claim_version": null,
+      "rule_version": null,
+      "status": "candidate"
+     },
+     "finding": "The label carried both an ingredient list and a nutrition panel.",
+     "rule_id": "grade.step5.sufficient",
+     "source": "GlamGenius product policy",
+     "source_id": null,
+     "source_url": null,
+     "step": 5,
+     "step_name": "Confidence"
+    }
+   ],
+   "value": {
+    "comparison": null,
+    "policy_version": "pack-mrp-value-v1",
+    "reason_key": "no_comparable_alternative",
+    "status": "not_enough_information"
+   }
+  },
+  "purchase_check": {
+   "alternative": {
+    "candidate": null,
+    "reason_key": "no_source_category_for_this_product",
+    "status": "not_enough_information"
+   },
+   "authorities": [
+    {
+     "action": "buy",
+     "authority": "product_result",
+     "reason_key": "label_facts",
+     "status": "applied"
+    },
+    {
+     "authority": "official_records",
+     "status": "no_governed_match"
+    },
+    {
+     "authority": "label_change",
+     "effect": "context_only",
+     "status": "unavailable"
+    },
+    {
+     "authority": "ownership",
+     "effect": "context_only",
+     "status": "physical_pack_required"
+    },
+    {
+     "authority": "decision_memory",
+     "effect": "context_only",
+     "status": "no_prior_exact_decision"
+    },
+    {
+     "authority": "alternative",
+     "effect": "context_only",
+     "status": "not_enough_information"
+    }
+   ],
+   "boundary": null,
+   "context": {
+    "category": "packaged_food",
+    "kind": "scan",
+    "strategy": "scan_product"
+   },
+   "contract_version": "step-14-v1",
+   "decision": {
+    "decision_fingerprint": "fd4798b00c7b728c78b0689fbf2760059f099d6c1ad5dd5aa9b87d15ec051b3c",
+    "primary_reason_authority": "product_result",
+    "primary_reason_code": "label_facts",
+    "state": "decided",
+    "verdict": "buy"
+   },
+   "identity": {
+    "barcode": "8901000000020",
+    "content_fingerprint": "11b3796939e2181adc60052647ff9785ba4e17a4c713653665f7245739b8e14f",
+    "label_version": 1,
+    "physical_pack_context": true,
+    "reference_view": false,
+    "state": "exact"
+   },
+   "memory": {
+    "current_decision": null,
+    "earlier_version_decision": null,
+    "exact_decision_count": 0,
+    "fidelity": "user_outcome_only",
+    "history_complete": true,
+    "kind": "scan_decision",
+    "state": "no_prior_exact_decision"
+   },
+   "missing_information": [],
+   "ownership": {
+    "authority": "inventory_product_link",
+    "effect": "context_only",
+    "state": "physical_pack_required"
+   },
+   "subject": {
+    "household_subject_id": null,
+    "is_account_holder": true
+   },
+   "value": {
+    "missing": [
+     "current_price"
+    ],
+    "state": "missing"
+   }
+  }
+ },
+ "own_pack_reference_mode": {
+  "product_result": {
+   "alternative": {
+    "candidate": null,
+    "policy_version": "comparable-food-alternative-v1",
+    "reason_key": "no_source_category_for_this_product",
+    "status": "not_enough_information"
+   },
+   "attribution": null,
+   "band": "green",
+   "barcode": "8901000000020",
+   "basis": "solid",
+   "better_next_action": null,
+   "brand": "Sunfield",
+   "community_observations": {
+    "active_window_days": 90,
+    "brand_reply_url": null,
+    "policy_version": "community-observations-v1",
+    "public_enabled": false,
+    "signals": []
+   },
+   "components": [
+    {
+     "band": "green",
+     "finding": "NOVA group 1. Whole foods only; nothing has been added.",
+     "key": "processing",
+     "rule": "Ceiling A.",
+     "source": "Monteiro CA, Cannon G, Levy RB, et al. Ultra-processed foods: what they are and how to identify them. Public Health Nutrition 22(5):936-941, 2019.",
+     "source_url": "https://doi.org/10.1017/S1368980018003762",
+     "sources": [
+      {
+       "identifier": "MONTEIRO-NOVA-2019",
+       "name": "Monteiro CA, Cannon G, Levy RB, et al. Ultra-processed foods: what they are and how to identify them. Public Health Nutrition 22(5):936-941, 2019.",
+       "publisher": "Public Health Nutrition (Cambridge University Press)",
+       "url": "https://doi.org/10.1017/S1368980018003762",
+       "version": "MONTEIRO-NOVA-2019"
+      }
+     ],
+     "state": "nova1"
+    },
+    {
+     "band": "green",
+     "exempt": [],
+     "finding": "Saturated fat is 1.2 g per 100 g and comes from the whole food itself.",
+     "high": [],
+     "key": "nutrients",
+     "rule": "No penalty. Saturated fat is only penalised at NOVA 3 and 4.",
+     "source": "GlamGenius product policy",
+     "source_url": null,
+     "sources": [],
+     "state": "clear"
+    },
+    {
+     "band": "green",
+     "finding": "No red-tier or black-tier additive on the label.",
+     "key": "additives",
+     "rule": null,
+     "source": "FSSAI. Food Safety and Standards (Food Products Standards and Food Additives) Regulations, 2011, as amended.",
+     "source_url": "https://www.fssai.gov.in/cms/food-safety-and-standards-regulations.php",
+     "sources": [
+      {
+       "identifier": "FSSAI-ADDITIVES-2011",
+       "name": "FSSAI. Food Safety and Standards (Food Products Standards and Food Additives) Regulations, 2011, as amended.",
+       "publisher": "FSSAI",
+       "url": "https://www.fssai.gov.in/cms/food-safety-and-standards-regulations.php",
+       "version": "FSSAI-ADDITIVES-2011"
+      }
+     ],
+     "state": "none"
+    },
+    {
+     "band": "green",
+     "declared_percent": null,
+     "finding": "The product name does not promise a particular ingredient.",
+     "ingredient": null,
+     "key": "naming",
+     "rule": null,
+     "source": "FSSAI. Food Safety and Standards (Labelling and Display) Regulations, 2020, and the subsequent front-of-pack nutrition labelling amendments.",
+     "source_url": "https://www.fssai.gov.in/cms/food-safety-and-standards-regulations.php",
+     "sources": [
+      {
+       "identifier": "FSSAI-LABELLING-2020",
+       "name": "FSSAI. Food Safety and Standards (Labelling and Display) Regulations, 2020, and the subsequent front-of-pack nutrition labelling amendments.",
+       "publisher": "FSSAI",
+       "url": "https://www.fssai.gov.in/cms/food-safety-and-standards-regulations.php",
+       "version": "FSSAI-LABELLING-2020"
+      }
+     ],
+     "state": "not_promised"
+    }
+   ],
+   "confidence": {
+    "level": "unverified",
+    "text": "From one source, not checked yet."
+   },
+   "decision": {
+    "action": "buy",
+    "reason_key": "label_facts"
+   },
+   "engine_version": "food-grade-v1",
+   "evidence": {
+    "ruleset_version": "v1",
+    "unpublished_rules": []
+   },
+   "facts_provenance": "confirmed_label_snapshot",
+   "grade": "A",
+   "helps": [
+    {
+     "band": "green",
+     "evidence": {
+      "evidence_claim_ids": [],
+      "evidence_claim_version": null,
+      "rule_version": null,
+      "status": "candidate"
+     },
+     "explanation": "declared_on_label",
+     "key": "protein",
+     "label": "protein",
+     "order": 60,
+     "quantity": {
+      "basis": "per_100_g",
+      "unit": "g",
+      "value": 13.0
+     },
+     "rule": null,
+     "sources": [],
+     "status": "declared"
+    },
+    {
+     "band": "green",
+     "evidence": {
+      "evidence_claim_ids": [],
+      "evidence_claim_version": null,
+      "rule_version": null,
+      "status": "candidate"
+     },
+     "explanation": "declared_on_label",
+     "key": "fibre",
+     "label": "fibre",
+     "order": 60,
+     "quantity": {
+      "basis": "per_100_g",
+      "unit": "g",
+      "value": 10.0
+     },
+     "rule": null,
+     "sources": [],
+     "status": "declared"
+    },
+    {
+     "band": "green",
+     "evidence": {
+      "evidence_claim_ids": [],
+      "evidence_claim_version": null,
+      "rule_version": null,
+      "status": "candidate"
+     },
+     "explanation": "lower_processing_group",
+     "key": "processing",
+     "label": "processing",
+     "order": 10,
+     "quantity": null,
+     "rule": null,
+     "sources": [],
+     "status": "no_concern_found"
+    }
+   ],
+   "ingredients": [
+    {
+     "actions": {
+      "explain": false,
+      "report": true,
+      "source": false
+     },
+     "band": "green",
+     "description": null,
+     "detail": null,
+     "label": "whole grain oats",
+     "name": "whole grain oats",
+     "source": null,
+     "sources": [],
+     "status": "no_concern_found",
+     "tier": "plain",
+     "why_flagged": null
+    }
+   ],
+   "label_change": {
+    "changed_fields": [],
+    "current_version": null,
+    "formula": {
+     "current_parse_status": null,
+     "only_on_current_label": [],
+     "only_on_previous_label": [],
+     "previous_parse_status": null,
+     "status": "not_applicable"
+    },
+    "previous_version": null,
+    "scope": "confirmed_label_history",
+    "status": "unavailable"
+   },
+   "label_version": {
+    "changed_fields": null,
+    "completeness": "complete_for_grading",
+    "content_fingerprint": "11b3796939e2181adc60052647ff9785ba4e17a4c713653665f7245739b8e14f",
+    "id": "<uuid>",
+    "observed_at": "<timestamp>",
+    "version_number": 1
+   },
+   "lowers": [],
+   "missing": [],
+   "negatives": [],
+   "nutrition": {
+    "protein_g": 13.0,
+    "salt_g": 0.02,
+    "total_fat_g": null,
+    "total_sugar_g": 1.0
+   },
+   "official_records": {
+    "authority": "FSSAI / FoSCoS",
+    "last_successful_check_at": null,
+    "record_type": "food_recall",
+    "records": [],
+    "source_url": "https://foscos.fssai.gov.in/food-recall"
+   },
+   "outcome": "graded",
+   "pack_size_g": 200.0,
+   "physical_pack_context": false,
+   "positives": [
+    {
+     "band": "green",
+     "evidence": {
+      "evidence_claim_ids": [],
+      "evidence_claim_version": null,
+      "rule_version": null,
+      "status": "candidate"
+     },
+     "explanation": "declared_on_label",
+     "key": "protein",
+     "label": "protein",
+     "order": 60,
+     "quantity": {
+      "basis": "per_100_g",
+      "unit": "g",
+      "value": 13.0
+     },
+     "rule": null,
+     "sources": [],
+     "status": "declared"
+    },
+    {
+     "band": "green",
+     "evidence": {
+      "evidence_claim_ids": [],
+      "evidence_claim_version": null,
+      "rule_version": null,
+      "status": "candidate"
+     },
+     "explanation": "declared_on_label",
+     "key": "fibre",
+     "label": "fibre",
+     "order": 60,
+     "quantity": {
+      "basis": "per_100_g",
+      "unit": "g",
+      "value": 10.0
+     },
+     "rule": null,
+     "sources": [],
+     "status": "declared"
+    },
+    {
+     "band": "green",
+     "evidence": {
+      "evidence_claim_ids": [],
+      "evidence_claim_version": null,
+      "rule_version": null,
+      "status": "candidate"
+     },
+     "explanation": "lower_processing_group",
+     "key": "processing",
+     "label": "processing",
+     "order": 10,
+     "quantity": null,
+     "rule": null,
+     "sources": [],
+     "status": "no_concern_found"
+    }
+   ],
+   "product_name": "Own Pack Oats",
+   "purity_note": null,
+   "quantity_guidance": null,
+   "result_contract_version": "v1",
+   "taxonomy": {
+    "category": "packaged_food",
+    "domain": "consumed",
+    "subcategory": "other_packaged_food"
+   },
+   "trace": [
+    {
+     "effect": null,
+     "evidence": {
+      "evidence_claim_ids": [],
+      "evidence_claim_version": null,
+      "rule_version": null,
+      "status": "candidate"
+     },
+     "finding": "This is a food, not something used to cook with.",
+     "rule_id": "grade.step0.not_a_culinary_ingredient",
+     "source": "GlamGenius culinary ingredient list",
+     "source_id": null,
+     "source_url": null,
+     "step": 0,
+     "step_name": "Culinary ingredient check"
+    },
+    {
+     "effect": "Ceiling A.",
+     "evidence": {
+      "evidence_claim_ids": [],
+      "evidence_claim_version": null,
+      "rule_version": "v1",
+      "status": "published"
+     },
+     "finding": "NOVA group 1. Whole foods only; nothing has been added.",
+     "rule_id": "grade.step1.nova_1",
+     "source": "Monteiro CA, Cannon G, Levy RB, et al. Ultra-processed foods: what they are and how to identify them. Public Health Nutrition 22(5):936-941, 2019.",
+     "source_id": "MONTEIRO-NOVA-2019",
+     "source_url": "https://doi.org/10.1017/S1368980018003762",
+     "step": 1,
+     "step_name": "Processing gate (NOVA)"
+    },
+    {
+     "effect": "No penalty. Saturated fat is only penalised at NOVA 3 and 4.",
+     "evidence": {
+      "evidence_claim_ids": [],
+      "evidence_claim_version": null,
+      "rule_version": null,
+      "status": "candidate"
+     },
+     "finding": "Saturated fat is 1.2 g per 100 g and comes from the whole food itself.",
+     "rule_id": "grade.step2.saturated_fat_not_penalised",
+     "source": "GlamGenius product policy",
+     "source_id": null,
+     "source_url": null,
+     "step": 2,
+     "step_name": "Nutrient bands"
+    },
+    {
+     "effect": "2 or more can cancel one ordinary penalty, never a severe one, and never lift past the ceiling.",
+     "evidence": {
+      "evidence_claim_ids": [],
+      "evidence_claim_version": null,
+      "rule_version": null,
+      "status": "candidate"
+     },
+     "finding": "Positives: fibre 10 g, protein 13 g.",
+     "rule_id": "grade.step2.positives",
+     "source": "GlamGenius product policy",
+     "source_id": null,
+     "source_url": null,
+     "step": 2,
+     "step_name": "Nutrient bands"
+    },
+    {
+     "effect": null,
+     "evidence": {
+      "evidence_claim_ids": [],
+      "evidence_claim_version": null,
+      "rule_version": null,
+      "status": "candidate"
+     },
+     "finding": "No red-tier or black-tier additive on the label.",
+     "rule_id": "grade.step3.no_capping_additive",
+     "source": "FSSAI. Food Safety and Standards (Food Products Standards and Food Additives) Regulations, 2011, as amended.",
+     "source_id": "FSSAI-ADDITIVES-2011",
+     "source_url": "https://www.fssai.gov.in/cms/food-safety-and-standards-regulations.php",
+     "step": 3,
+     "step_name": "Additives"
+    },
+    {
+     "effect": null,
+     "evidence": {
+      "evidence_claim_ids": [],
+      "evidence_claim_version": null,
+      "rule_version": null,
+      "status": "candidate"
+     },
+     "finding": "The product name does not promise a particular ingredient.",
+     "rule_id": "grade.step4.name_promises_nothing",
+     "source": "FSSAI. Food Safety and Standards (Labelling and Display) Regulations, 2020, and the subsequent front-of-pack nutrition labelling amendments.",
+     "source_id": "FSSAI-LABELLING-2020",
+     "source_url": "https://www.fssai.gov.in/cms/food-safety-and-standards-regulations.php",
+     "step": 4,
+     "step_name": "Named-ingredient integrity"
+    },
+    {
+     "effect": null,
+     "evidence": {
+      "evidence_claim_ids": [],
+      "evidence_claim_version": null,
+      "rule_version": null,
+      "status": "candidate"
+     },
+     "finding": "The label carried both an ingredient list and a nutrition panel.",
+     "rule_id": "grade.step5.sufficient",
+     "source": "GlamGenius product policy",
+     "source_id": null,
+     "source_url": null,
+     "step": 5,
+     "step_name": "Confidence"
+    }
+   ],
+   "value": {
+    "comparison": null,
+    "policy_version": "pack-mrp-value-v1",
+    "reason_key": "no_comparable_alternative",
+    "status": "not_enough_information"
+   }
+  },
+  "purchase_check": {
+   "alternative": {
+    "candidate": null,
+    "reason_key": "no_source_category_for_this_product",
+    "status": "not_enough_information"
+   },
+   "authorities": [
+    {
+     "action": "buy",
+     "authority": "product_result",
+     "reason_key": "label_facts",
+     "status": "applied"
+    },
+    {
+     "authority": "official_records",
+     "status": "reference_view"
+    },
+    {
+     "authority": "label_change",
+     "effect": "context_only",
+     "status": "unavailable"
+    },
+    {
+     "authority": "ownership",
+     "effect": "context_only",
+     "status": "reference_view"
+    },
+    {
+     "authority": "decision_memory",
+     "effect": "context_only",
+     "status": "reference_view"
+    },
+    {
+     "authority": "alternative",
+     "effect": "context_only",
+     "status": "not_enough_information"
+    }
+   ],
+   "boundary": null,
+   "context": {
+    "category": "packaged_food",
+    "kind": "scan",
+    "strategy": "scan_product"
+   },
+   "contract_version": "step-14-v1",
+   "decision": {
+    "decision_fingerprint": "fd4798b00c7b728c78b0689fbf2760059f099d6c1ad5dd5aa9b87d15ec051b3c",
+    "primary_reason_authority": "product_result",
+    "primary_reason_code": "label_facts",
+    "state": "decided",
+    "verdict": "buy"
+   },
+   "identity": {
+    "barcode": "8901000000020",
+    "content_fingerprint": "11b3796939e2181adc60052647ff9785ba4e17a4c713653665f7245739b8e14f",
+    "label_version": 1,
+    "physical_pack_context": false,
+    "reference_view": true,
+    "state": "exact"
+   },
+   "memory": {
+    "fidelity": "user_outcome_only",
+    "kind": "scan_decision",
+    "state": "reference_view"
+   },
+   "missing_information": [],
+   "ownership": {
+    "authority": "inventory_product_link",
+    "effect": "context_only",
+    "state": "reference_view"
+   },
+   "subject": {
+    "household_subject_id": null,
+    "is_account_holder": true
+   },
+   "value": {
+    "missing": [
+     "current_price"
+    ],
+    "state": "missing"
+   }
+  }
+ },
+ "unknown": {
+  "product_result": {
+   "alternative": {
+    "candidate": null,
+    "policy_version": "comparable-food-alternative-v1",
+    "reason_key": "current_product_has_no_published_grade",
+    "status": "not_enough_information"
+   },
+   "attribution": null,
+   "band": "yellow",
+   "barcode": "8901000000022",
+   "basis": "solid",
+   "better_next_action": null,
+   "brand": null,
+   "community_observations": {
+    "active_window_days": 90,
+    "brand_reply_url": null,
+    "policy_version": "community-observations-v1",
+    "public_enabled": false,
+    "signals": []
+   },
+   "components": [
+    {
+     "band": "green",
+     "finding": "NOVA group 1. Whole foods only; nothing has been added.",
+     "key": "processing",
+     "rule": "Ceiling A.",
+     "source": "Monteiro CA, Cannon G, Levy RB, et al. Ultra-processed foods: what they are and how to identify them. Public Health Nutrition 22(5):936-941, 2019.",
+     "source_url": "https://doi.org/10.1017/S1368980018003762",
+     "sources": [
+      {
+       "identifier": "MONTEIRO-NOVA-2019",
+       "name": "Monteiro CA, Cannon G, Levy RB, et al. Ultra-processed foods: what they are and how to identify them. Public Health Nutrition 22(5):936-941, 2019.",
+       "publisher": "Public Health Nutrition (Cambridge University Press)",
+       "url": "https://doi.org/10.1017/S1368980018003762",
+       "version": "MONTEIRO-NOVA-2019"
+      }
+     ],
+     "state": "nova1"
+    },
+    {
+     "band": "green",
+     "exempt": [],
+     "finding": null,
+     "high": [],
+     "key": "nutrients",
+     "rule": null,
+     "source": null,
+     "source_url": null,
+     "sources": [],
+     "state": "clear"
+    },
+    {
+     "band": "green",
+     "finding": "No red-tier or black-tier additive on the label.",
+     "key": "additives",
+     "rule": null,
+     "source": "FSSAI. Food Safety and Standards (Food Products Standards and Food Additives) Regulations, 2011, as amended.",
+     "source_url": "https://www.fssai.gov.in/cms/food-safety-and-standards-regulations.php",
+     "sources": [
+      {
+       "identifier": "FSSAI-ADDITIVES-2011",
+       "name": "FSSAI. Food Safety and Standards (Food Products Standards and Food Additives) Regulations, 2011, as amended.",
+       "publisher": "FSSAI",
+       "url": "https://www.fssai.gov.in/cms/food-safety-and-standards-regulations.php",
+       "version": "FSSAI-ADDITIVES-2011"
+      }
+     ],
+     "state": "none"
+    },
+    {
+     "band": "green",
+     "declared_percent": null,
+     "finding": "The product name does not promise a particular ingredient.",
+     "ingredient": null,
+     "key": "naming",
+     "rule": null,
+     "source": "FSSAI. Food Safety and Standards (Labelling and Display) Regulations, 2020, and the subsequent front-of-pack nutrition labelling amendments.",
+     "source_url": "https://www.fssai.gov.in/cms/food-safety-and-standards-regulations.php",
+     "sources": [
+      {
+       "identifier": "FSSAI-LABELLING-2020",
+       "name": "FSSAI. Food Safety and Standards (Labelling and Display) Regulations, 2020, and the subsequent front-of-pack nutrition labelling amendments.",
+       "publisher": "FSSAI",
+       "url": "https://www.fssai.gov.in/cms/food-safety-and-standards-regulations.php",
+       "version": "FSSAI-LABELLING-2020"
+      }
+     ],
+     "state": "not_promised"
+    }
+   ],
+   "confidence": {
+    "level": "not_enough_information",
+    "text": "Not enough information about this one yet."
+   },
+   "decision": {
+    "action": null,
+    "reason_key": "not_enough_information"
+   },
+   "engine_version": "food-grade-v1",
+   "evidence": {
+    "ruleset_version": "v1",
+    "unpublished_rules": []
+   },
+   "facts_provenance": "open_food_facts",
+   "grade": null,
+   "helps": [
+    {
+     "band": "green",
+     "evidence": {
+      "evidence_claim_ids": [],
+      "evidence_claim_version": null,
+      "rule_version": null,
+      "status": "candidate"
+     },
+     "explanation": "lower_processing_group",
+     "key": "processing",
+     "label": "processing",
+     "order": 10,
+     "quantity": null,
+     "rule": null,
+     "sources": [],
+     "status": "no_concern_found"
+    }
+   ],
+   "ingredients": [],
+   "label_change": null,
+   "label_version": null,
+   "lowers": [],
+   "missing": [
+    "ingredient list",
+    "nutrition panel"
+   ],
+   "negatives": [],
+   "nutrition": {
+    "protein_g": null,
+    "salt_g": null,
+    "total_fat_g": null,
+    "total_sugar_g": null
+   },
+   "official_records": {
+    "authority": "FSSAI / FoSCoS",
+    "last_successful_check_at": null,
+    "record_type": "food_recall",
+    "records": [],
+    "source_url": "https://foscos.fssai.gov.in/food-recall"
+   },
+   "outcome": "not_enough_information",
+   "pack_size_g": null,
+   "physical_pack_context": false,
+   "positives": [
+    {
+     "band": "green",
+     "evidence": {
+      "evidence_claim_ids": [],
+      "evidence_claim_version": null,
+      "rule_version": null,
+      "status": "candidate"
+     },
+     "explanation": "lower_processing_group",
+     "key": "processing",
+     "label": "processing",
+     "order": 10,
+     "quantity": null,
+     "rule": null,
+     "sources": [],
+     "status": "no_concern_found"
+    }
+   ],
+   "product_name": "8901000000022",
+   "purity_note": null,
+   "quantity_guidance": null,
+   "result_contract_version": "v1",
+   "taxonomy": {
+    "category": "packaged_food",
+    "domain": "consumed",
+    "subcategory": "other_packaged_food"
+   },
+   "trace": [
+    {
+     "effect": null,
+     "evidence": {
+      "evidence_claim_ids": [],
+      "evidence_claim_version": null,
+      "rule_version": null,
+      "status": "candidate"
+     },
+     "finding": "This is a food, not something used to cook with.",
+     "rule_id": "grade.step0.not_a_culinary_ingredient",
+     "source": "GlamGenius culinary ingredient list",
+     "source_id": null,
+     "source_url": null,
+     "step": 0,
+     "step_name": "Culinary ingredient check"
+    },
+    {
+     "effect": "Ceiling A.",
+     "evidence": {
+      "evidence_claim_ids": [],
+      "evidence_claim_version": null,
+      "rule_version": "v1",
+      "status": "published"
+     },
+     "finding": "NOVA group 1. Whole foods only; nothing has been added.",
+     "rule_id": "grade.step1.nova_1",
+     "source": "Monteiro CA, Cannon G, Levy RB, et al. Ultra-processed foods: what they are and how to identify them. Public Health Nutrition 22(5):936-941, 2019.",
+     "source_id": "MONTEIRO-NOVA-2019",
+     "source_url": "https://doi.org/10.1017/S1368980018003762",
+     "step": 1,
+     "step_name": "Processing gate (NOVA)"
+    },
+    {
+     "effect": null,
+     "evidence": {
+      "evidence_claim_ids": [],
+      "evidence_claim_version": null,
+      "rule_version": null,
+      "status": "candidate"
+     },
+     "finding": "No red-tier or black-tier additive on the label.",
+     "rule_id": "grade.step3.no_capping_additive",
+     "source": "FSSAI. Food Safety and Standards (Food Products Standards and Food Additives) Regulations, 2011, as amended.",
+     "source_id": "FSSAI-ADDITIVES-2011",
+     "source_url": "https://www.fssai.gov.in/cms/food-safety-and-standards-regulations.php",
+     "step": 3,
+     "step_name": "Additives"
+    },
+    {
+     "effect": null,
+     "evidence": {
+      "evidence_claim_ids": [],
+      "evidence_claim_version": null,
+      "rule_version": null,
+      "status": "candidate"
+     },
+     "finding": "The product name does not promise a particular ingredient.",
+     "rule_id": "grade.step4.name_promises_nothing",
+     "source": "FSSAI. Food Safety and Standards (Labelling and Display) Regulations, 2020, and the subsequent front-of-pack nutrition labelling amendments.",
+     "source_id": "FSSAI-LABELLING-2020",
+     "source_url": "https://www.fssai.gov.in/cms/food-safety-and-standards-regulations.php",
+     "step": 4,
+     "step_name": "Named-ingredient integrity"
+    },
+    {
+     "effect": "NOT_ENOUGH_INFORMATION. No grade is shown.",
+     "evidence": {
+      "evidence_claim_ids": [],
+      "evidence_claim_version": null,
+      "rule_version": null,
+      "status": "candidate"
+     },
+     "finding": "The label is missing its ingredient list and its nutrition panel.",
+     "rule_id": "grade.step5.not_enough_information",
+     "source": "GlamGenius product policy",
+     "source_id": null,
+     "source_url": null,
+     "step": 5,
+     "step_name": "Confidence"
+    }
+   ],
+   "value": {
+    "comparison": null,
+    "policy_version": "pack-mrp-value-v1",
+    "reason_key": "no_comparable_alternative",
+    "status": "not_enough_information"
+   }
+  },
+  "purchase_check": {
+   "alternative": {
+    "candidate": null,
+    "reason_key": "current_product_has_no_published_grade",
+    "status": "not_enough_information"
+   },
+   "authorities": [
+    {
+     "action": null,
+     "authority": "product_result",
+     "reason_key": "not_enough_information",
+     "status": "not_enough_information"
+    },
+    {
+     "authority": "official_records",
+     "status": "identity_insufficient"
+    },
+    {
+     "authority": "label_change",
+     "effect": "context_only",
+     "status": "no_confirmed_label"
+    },
+    {
+     "authority": "ownership",
+     "effect": "context_only",
+     "status": "sign_in_required"
+    },
+    {
+     "authority": "decision_memory",
+     "effect": "context_only",
+     "status": "sign_in_required"
+    },
+    {
+     "authority": "alternative",
+     "effect": "context_only",
+     "status": "not_enough_information"
+    }
+   ],
+   "boundary": null,
+   "context": {
+    "category": "packaged_food",
+    "kind": "scan",
+    "strategy": "scan_product"
+   },
+   "contract_version": "step-14-v1",
+   "decision": {
+    "decision_fingerprint": "b21a4e5acd17b1a9bd7da003be83c2514b513e304fdfb37df2ebe56feb757556",
+    "primary_reason_authority": "purchase_os",
+    "primary_reason_code": "identity_insufficient",
+    "state": "not_enough_information",
+    "verdict": null
+   },
+   "identity": {
+    "barcode": "8901000000022",
+    "content_fingerprint": null,
+    "label_version": null,
+    "physical_pack_context": false,
+    "reference_view": false,
+    "state": "insufficient"
+   },
+   "memory": {
+    "fidelity": "user_outcome_only",
+    "kind": "scan_decision",
+    "state": "sign_in_required"
+   },
+   "missing_information": [
+    "exact_label_version",
+    "ingredient list",
+    "nutrition panel"
+   ],
+   "ownership": {
+    "authority": "inventory_product_link",
+    "effect": "context_only",
+    "state": "sign_in_required"
+   },
+   "subject": null,
+   "value": {
+    "missing": [
+     "current_price"
+    ],
+    "state": "missing"
+   }
+  }
+ },
+ "unpublished_ruleset": {
+  "product_result": {
+   "alternative": {
+    "candidate": null,
+    "policy_version": "comparable-food-alternative-v1",
+    "reason_key": "current_product_has_no_published_grade",
+    "status": "not_enough_information"
+   },
+   "attribution": null,
+   "band": "yellow",
+   "barcode": "8901000000025",
+   "basis": "solid",
+   "better_next_action": null,
+   "brand": "Sunfield",
+   "community_observations": {
+    "active_window_days": 90,
+    "brand_reply_url": null,
+    "policy_version": "community-observations-v1",
+    "public_enabled": false,
+    "signals": []
+   },
+   "components": [
+    {
+     "band": "green",
+     "finding": "NOVA group 1. Whole foods only; nothing has been added.",
+     "key": "processing",
+     "rule": "Ceiling A.",
+     "source": "Monteiro CA, Cannon G, Levy RB, et al. Ultra-processed foods: what they are and how to identify them. Public Health Nutrition 22(5):936-941, 2019.",
+     "source_url": "https://doi.org/10.1017/S1368980018003762",
+     "sources": [
+      {
+       "identifier": "MONTEIRO-NOVA-2019",
+       "name": "Monteiro CA, Cannon G, Levy RB, et al. Ultra-processed foods: what they are and how to identify them. Public Health Nutrition 22(5):936-941, 2019.",
+       "publisher": "Public Health Nutrition (Cambridge University Press)",
+       "url": "https://doi.org/10.1017/S1368980018003762",
+       "version": "MONTEIRO-NOVA-2019"
+      }
+     ],
+     "state": "nova1"
+    },
+    {
+     "band": "green",
+     "exempt": [],
+     "finding": "Saturated fat is 1.2 g per 100 g and comes from the whole food itself.",
+     "high": [],
+     "key": "nutrients",
+     "rule": "No penalty. Saturated fat is only penalised at NOVA 3 and 4.",
+     "source": "GlamGenius product policy",
+     "source_url": null,
+     "sources": [],
+     "state": "clear"
+    },
+    {
+     "band": "green",
+     "finding": "No red-tier or black-tier additive on the label.",
+     "key": "additives",
+     "rule": null,
+     "source": "FSSAI. Food Safety and Standards (Food Products Standards and Food Additives) Regulations, 2011, as amended.",
+     "source_url": "https://www.fssai.gov.in/cms/food-safety-and-standards-regulations.php",
+     "sources": [
+      {
+       "identifier": "FSSAI-ADDITIVES-2011",
+       "name": "FSSAI. Food Safety and Standards (Food Products Standards and Food Additives) Regulations, 2011, as amended.",
+       "publisher": "FSSAI",
+       "url": "https://www.fssai.gov.in/cms/food-safety-and-standards-regulations.php",
+       "version": "FSSAI-ADDITIVES-2011"
+      }
+     ],
+     "state": "none"
+    },
+    {
+     "band": "green",
+     "declared_percent": null,
+     "finding": "The product name does not promise a particular ingredient.",
+     "ingredient": null,
+     "key": "naming",
+     "rule": null,
+     "source": "FSSAI. Food Safety and Standards (Labelling and Display) Regulations, 2020, and the subsequent front-of-pack nutrition labelling amendments.",
+     "source_url": "https://www.fssai.gov.in/cms/food-safety-and-standards-regulations.php",
+     "sources": [
+      {
+       "identifier": "FSSAI-LABELLING-2020",
+       "name": "FSSAI. Food Safety and Standards (Labelling and Display) Regulations, 2020, and the subsequent front-of-pack nutrition labelling amendments.",
+       "publisher": "FSSAI",
+       "url": "https://www.fssai.gov.in/cms/food-safety-and-standards-regulations.php",
+       "version": "FSSAI-LABELLING-2020"
+      }
+     ],
+     "state": "not_promised"
+    }
+   ],
+   "confidence": {
+    "level": "unverified",
+    "text": "From one source, not checked yet."
+   },
+   "decision": {
+    "action": null,
+    "reason_key": "not_enough_information"
+   },
+   "engine_version": "food-grade-v1",
+   "evidence": {
+    "ruleset_version": "v1",
+    "unpublished_rules": []
+   },
+   "facts_provenance": "confirmed_label_snapshot",
+   "grade": null,
+   "helps": [
+    {
+     "band": "green",
+     "evidence": {
+      "evidence_claim_ids": [],
+      "evidence_claim_version": null,
+      "rule_version": null,
+      "status": "candidate"
+     },
+     "explanation": "declared_on_label",
+     "key": "protein",
+     "label": "protein",
+     "order": 60,
+     "quantity": {
+      "basis": "per_100_g",
+      "unit": "g",
+      "value": 13.0
+     },
+     "rule": null,
+     "sources": [],
+     "status": "declared"
+    },
+    {
+     "band": "green",
+     "evidence": {
+      "evidence_claim_ids": [],
+      "evidence_claim_version": null,
+      "rule_version": null,
+      "status": "candidate"
+     },
+     "explanation": "declared_on_label",
+     "key": "fibre",
+     "label": "fibre",
+     "order": 60,
+     "quantity": {
+      "basis": "per_100_g",
+      "unit": "g",
+      "value": 10.0
+     },
+     "rule": null,
+     "sources": [],
+     "status": "declared"
+    },
+    {
+     "band": "green",
+     "evidence": {
+      "evidence_claim_ids": [],
+      "evidence_claim_version": null,
+      "rule_version": null,
+      "status": "candidate"
+     },
+     "explanation": "lower_processing_group",
+     "key": "processing",
+     "label": "processing",
+     "order": 10,
+     "quantity": null,
+     "rule": null,
+     "sources": [],
+     "status": "no_concern_found"
+    }
+   ],
+   "ingredients": [
+    {
+     "actions": {
+      "explain": false,
+      "report": true,
+      "source": false
+     },
+     "band": "green",
+     "description": null,
+     "detail": null,
+     "label": "whole grain oats",
+     "name": "whole grain oats",
+     "source": null,
+     "sources": [],
+     "status": "no_concern_found",
+     "tier": "plain",
+     "why_flagged": null
+    }
+   ],
+   "label_change": {
+    "changed_fields": [],
+    "current_version": null,
+    "formula": {
+     "current_parse_status": null,
+     "only_on_current_label": [],
+     "only_on_previous_label": [],
+     "previous_parse_status": null,
+     "status": "not_applicable"
+    },
+    "previous_version": null,
+    "scope": "confirmed_label_history",
+    "status": "unavailable"
+   },
+   "label_version": {
+    "changed_fields": null,
+    "completeness": "complete_for_grading",
+    "content_fingerprint": "712e8412fe2765ee3e8c76853de17af679f582bff05c029674bf93a01a66ebc9",
+    "id": "<uuid>",
+    "observed_at": "<timestamp>",
+    "version_number": 1
+   },
+   "lowers": [],
+   "missing": [
+    "grade.step1.nova",
+    "grade.step2.high_salt",
+    "grade.step2.high_saturated_fat",
+    "grade.step2.high_total_sugars",
+    "grade.step2.partially_hydrogenated_oil",
+    "grade.step3.black_tier"
+   ],
+   "negatives": [],
+   "nutrition": {
+    "protein_g": 13.0,
+    "salt_g": 0.02,
+    "total_fat_g": null,
+    "total_sugar_g": 1.0
+   },
+   "official_records": {
+    "authority": "FSSAI / FoSCoS",
+    "last_successful_check_at": null,
+    "record_type": "food_recall",
+    "records": [],
+    "source_url": "https://foscos.fssai.gov.in/food-recall"
+   },
+   "outcome": "not_enough_information",
+   "pack_size_g": 200.0,
+   "physical_pack_context": false,
+   "positives": [
+    {
+     "band": "green",
+     "evidence": {
+      "evidence_claim_ids": [],
+      "evidence_claim_version": null,
+      "rule_version": null,
+      "status": "candidate"
+     },
+     "explanation": "declared_on_label",
+     "key": "protein",
+     "label": "protein",
+     "order": 60,
+     "quantity": {
+      "basis": "per_100_g",
+      "unit": "g",
+      "value": 13.0
+     },
+     "rule": null,
+     "sources": [],
+     "status": "declared"
+    },
+    {
+     "band": "green",
+     "evidence": {
+      "evidence_claim_ids": [],
+      "evidence_claim_version": null,
+      "rule_version": null,
+      "status": "candidate"
+     },
+     "explanation": "declared_on_label",
+     "key": "fibre",
+     "label": "fibre",
+     "order": 60,
+     "quantity": {
+      "basis": "per_100_g",
+      "unit": "g",
+      "value": 10.0
+     },
+     "rule": null,
+     "sources": [],
+     "status": "declared"
+    },
+    {
+     "band": "green",
+     "evidence": {
+      "evidence_claim_ids": [],
+      "evidence_claim_version": null,
+      "rule_version": null,
+      "status": "candidate"
+     },
+     "explanation": "lower_processing_group",
+     "key": "processing",
+     "label": "processing",
+     "order": 10,
+     "quantity": null,
+     "rule": null,
+     "sources": [],
+     "status": "no_concern_found"
+    }
+   ],
+   "product_name": "Unpublished Oats",
+   "purity_note": null,
+   "quantity_guidance": null,
+   "result_contract_version": "v1",
+   "taxonomy": {
+    "category": "packaged_food",
+    "domain": "consumed",
+    "subcategory": "other_packaged_food"
+   },
+   "trace": [
+    {
+     "effect": null,
+     "evidence": {
+      "evidence_claim_ids": [],
+      "evidence_claim_version": null,
+      "rule_version": null,
+      "status": "candidate"
+     },
+     "finding": "This is a food, not something used to cook with.",
+     "rule_id": "grade.step0.not_a_culinary_ingredient",
+     "source": "GlamGenius culinary ingredient list",
+     "source_id": null,
+     "source_url": null,
+     "step": 0,
+     "step_name": "Culinary ingredient check"
+    },
+    {
+     "effect": "Ceiling A.",
+     "evidence": {
+      "evidence_claim_ids": [],
+      "evidence_claim_version": null,
+      "rule_version": "v1",
+      "status": "candidate"
+     },
+     "finding": "NOVA group 1. Whole foods only; nothing has been added.",
+     "rule_id": "grade.step1.nova_1",
+     "source": "Monteiro CA, Cannon G, Levy RB, et al. Ultra-processed foods: what they are and how to identify them. Public Health Nutrition 22(5):936-941, 2019.",
+     "source_id": "MONTEIRO-NOVA-2019",
+     "source_url": "https://doi.org/10.1017/S1368980018003762",
+     "step": 1,
+     "step_name": "Processing gate (NOVA)"
+    },
+    {
+     "effect": "No penalty. Saturated fat is only penalised at NOVA 3 and 4.",
+     "evidence": {
+      "evidence_claim_ids": [],
+      "evidence_claim_version": null,
+      "rule_version": null,
+      "status": "candidate"
+     },
+     "finding": "Saturated fat is 1.2 g per 100 g and comes from the whole food itself.",
+     "rule_id": "grade.step2.saturated_fat_not_penalised",
+     "source": "GlamGenius product policy",
+     "source_id": null,
+     "source_url": null,
+     "step": 2,
+     "step_name": "Nutrient bands"
+    },
+    {
+     "effect": "2 or more can cancel one ordinary penalty, never a severe one, and never lift past the ceiling.",
+     "evidence": {
+      "evidence_claim_ids": [],
+      "evidence_claim_version": null,
+      "rule_version": null,
+      "status": "candidate"
+     },
+     "finding": "Positives: fibre 10 g, protein 13 g.",
+     "rule_id": "grade.step2.positives",
+     "source": "GlamGenius product policy",
+     "source_id": null,
+     "source_url": null,
+     "step": 2,
+     "step_name": "Nutrient bands"
+    },
+    {
+     "effect": null,
+     "evidence": {
+      "evidence_claim_ids": [],
+      "evidence_claim_version": null,
+      "rule_version": null,
+      "status": "candidate"
+     },
+     "finding": "No red-tier or black-tier additive on the label.",
+     "rule_id": "grade.step3.no_capping_additive",
+     "source": "FSSAI. Food Safety and Standards (Food Products Standards and Food Additives) Regulations, 2011, as amended.",
+     "source_id": "FSSAI-ADDITIVES-2011",
+     "source_url": "https://www.fssai.gov.in/cms/food-safety-and-standards-regulations.php",
+     "step": 3,
+     "step_name": "Additives"
+    },
+    {
+     "effect": null,
+     "evidence": {
+      "evidence_claim_ids": [],
+      "evidence_claim_version": null,
+      "rule_version": null,
+      "status": "candidate"
+     },
+     "finding": "The product name does not promise a particular ingredient.",
+     "rule_id": "grade.step4.name_promises_nothing",
+     "source": "FSSAI. Food Safety and Standards (Labelling and Display) Regulations, 2020, and the subsequent front-of-pack nutrition labelling amendments.",
+     "source_id": "FSSAI-LABELLING-2020",
+     "source_url": "https://www.fssai.gov.in/cms/food-safety-and-standards-regulations.php",
+     "step": 4,
+     "step_name": "Named-ingredient integrity"
+    },
+    {
+     "effect": null,
+     "evidence": {
+      "evidence_claim_ids": [],
+      "evidence_claim_version": null,
+      "rule_version": null,
+      "status": "candidate"
+     },
+     "finding": "The label carried both an ingredient list and a nutrition panel.",
+     "rule_id": "grade.step5.sufficient",
+     "source": "GlamGenius product policy",
+     "source_id": null,
+     "source_url": null,
+     "step": 5,
+     "step_name": "Confidence"
+    }
+   ],
+   "value": {
+    "comparison": null,
+    "policy_version": "pack-mrp-value-v1",
+    "reason_key": "no_comparable_alternative",
+    "status": "not_enough_information"
+   }
+  },
+  "purchase_check": {
+   "alternative": {
+    "candidate": null,
+    "reason_key": "current_product_has_no_published_grade",
+    "status": "not_enough_information"
+   },
+   "authorities": [
+    {
+     "action": null,
+     "authority": "product_result",
+     "reason_key": "not_enough_information",
+     "status": "not_enough_information"
+    },
+    {
+     "authority": "official_records",
+     "status": "physical_pack_required"
+    },
+    {
+     "authority": "label_change",
+     "effect": "context_only",
+     "status": "unavailable"
+    },
+    {
+     "authority": "ownership",
+     "effect": "context_only",
+     "status": "sign_in_required"
+    },
+    {
+     "authority": "decision_memory",
+     "effect": "context_only",
+     "status": "sign_in_required"
+    },
+    {
+     "authority": "alternative",
+     "effect": "context_only",
+     "status": "not_enough_information"
+    }
+   ],
+   "boundary": null,
+   "context": {
+    "category": "packaged_food",
+    "kind": "scan",
+    "strategy": "scan_product"
+   },
+   "contract_version": "step-14-v1",
+   "decision": {
+    "decision_fingerprint": "a8a6ab6130589920ae5d7b216b2f9ae6bc6593d1c1a5a1e751df589917cebadc",
+    "primary_reason_authority": "product_result",
+    "primary_reason_code": "not_enough_information",
+    "state": "not_enough_information",
+    "verdict": null
+   },
+   "identity": {
+    "barcode": "8901000000025",
+    "content_fingerprint": "712e8412fe2765ee3e8c76853de17af679f582bff05c029674bf93a01a66ebc9",
+    "label_version": 1,
+    "physical_pack_context": false,
+    "reference_view": false,
+    "state": "exact"
+   },
+   "memory": {
+    "fidelity": "user_outcome_only",
+    "kind": "scan_decision",
+    "state": "sign_in_required"
+   },
+   "missing_information": [
+    "grade.step1.nova",
+    "grade.step2.high_salt",
+    "grade.step2.high_saturated_fat",
+    "grade.step2.high_total_sugars",
+    "grade.step2.partially_hydrogenated_oil",
+    "grade.step3.black_tier",
+    "physical_pack"
+   ],
+   "ownership": {
+    "authority": "inventory_product_link",
+    "effect": "context_only",
+    "state": "sign_in_required"
+   },
+   "subject": null,
+   "value": {
+    "missing": [
+     "current_price"
+    ],
+    "state": "missing"
+   }
+  }
+ }
+}
