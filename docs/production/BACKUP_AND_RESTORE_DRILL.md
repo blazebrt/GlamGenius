@@ -1,5 +1,11 @@
 # Backup and Restore Drill
 
+> **HISTORICAL / UNVERIFIED PROCEDURE.** This draft assumes provider PITR and
+> does not prove a current production restore. Do not assume a paid backup
+> feature exists or run this against production. Confirm live entitlement,
+> backup coverage and a safe isolated rehearsal under [current operations](../OPERATIONS.md#render-pre-pmf-runtime-zero-cost)
+> and [scale readiness](../operations/SCALE_READINESS_AND_SLOS.md) first.
+
 This document outlines the standard operating procedure for backing up and restoring the GlamGenius production database on Supabase, and logs the results of the staging simulation.
 
 ## Architecture & Coverage

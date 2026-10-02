@@ -1,5 +1,10 @@
 # Supabase Target Architecture
 
+> **HISTORICAL / SUPERSEDED TARGET (January 2026).** This diagram predates
+> the physical Store A/B separation and current Render release topology. It
+> is not a migration or deployment procedure. See [architecture authority](ARCHITECTURE_AUTHORITY.md),
+> [scale architecture](SCALE_ARCHITECTURE_100CR.md) and the current code.
+
 _Last updated: 2026-01. Branch: `architecture/supabase-v2-cutover`._
 
 ## 1. One-line summary
