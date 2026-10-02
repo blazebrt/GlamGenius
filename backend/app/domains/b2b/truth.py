@@ -51,6 +51,7 @@ from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.domains.evidence.urls import openable_url
 from app.domains.nutrition.grading import from_scan
 from app.domains.nutrition.grading.production_rules import (
     FOOD_RULE_VERSION,
@@ -155,17 +156,25 @@ def _not_enough(barcode: str, reason: str) -> dict[str, Any]:
 
 
 def _rests_on_published_rule(row: dict[str, Any]) -> bool:
-    """A named rule, published, citing at least one published evidence claim.
+    """A named published rule, cited claim and only openable sources.
 
     Production only ever marks a rule published when it has a published claim;
     this does not take that on trust. A "published" rule that names no claim
-    has nothing a client could check, and is not distributed.
+    has nothing a client could check, and is not distributed. Neither is a
+    lowering factor without a source URL the client can open.
     """
     evidence = row.get("evidence") or {}
+    sources = row.get("sources")
     return (
         bool(row.get("rule"))
         and evidence.get("status") == STATUS_PUBLISHED
         and bool(evidence.get("evidence_claim_ids"))
+        and isinstance(sources, (list, tuple))
+        and bool(sources)
+        and all(
+            isinstance(source, dict) and openable_url(source.get("url")) is not None
+            for source in sources
+        )
     )
 
 

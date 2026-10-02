@@ -14,13 +14,15 @@ design.
 Order of work for a request, cheapest refusal first, and nothing expensive
 before every gate has passed:
 
-1. credential (one indexed lookup by public prefix; one generic 401 for every
-   failure);
-2. per-minute burst limit for that client (in memory);
-3. request shape — no query parameters, an exact GS1 barcode (422);
-4. daily allowance, one atomic statement, committed at once (429);
-5. Product Truth, from Store B and published rules;
-6. usage outcome counted, committed.
+1. malformed credential refused before SQL;
+2. trusted-network admission for valid-shaped credentials;
+3. credential (one indexed lookup by public prefix; one generic 401 for every
+   authentication failure);
+4. per-minute burst limit for that client (in memory);
+5. request shape — no query parameters, an exact GS1 barcode (422);
+6. daily allowance, one atomic statement, committed at once (429);
+7. Product Truth, from Store B and published rules;
+8. usage outcome counted, committed.
 
 Logs name the client key, the key prefix, the outcome and the request id.
 Never the credential, its hash, the Authorization header, the barcode, the
@@ -41,6 +43,7 @@ from app.domains.b2b.credentials import prefix_of
 from app.shared.database.base import utcnow
 from app.shared.database.sql import get_session
 from app.shared.observability.request_id import get_request_id
+from app.shared.security.network import client_ip
 
 logger = logging.getLogger(__name__)
 
@@ -81,11 +84,17 @@ def _rate_limited(code: str, retry_after: int) -> HTTPException:
 
 
 async def b2b_caller(
+    request: Request,
     credentials: HTTPAuthorizationCredentials | None = Depends(_b2b_key),
     session: AsyncSession = Depends(get_session),
 ) -> access.B2BCaller:
-    """Authenticate the B2B key, then apply the client's per-minute burst limit."""
+    """Bound network lookups, authenticate, then apply the client's burst limit."""
     presented = credentials.credentials if credentials is not None else None
+    if prefix_of(presented) is None:
+        raise _unauthenticated()
+    retry_after = quota.auth_network_retry_after(client_ip(request))
+    if retry_after is not None:
+        raise _rate_limited("B2B_RATE_LIMITED", retry_after)
     caller = await access.authenticate(session, presented)
     if caller is None:
         # The prefix only when the value had the credential's exact shape: it

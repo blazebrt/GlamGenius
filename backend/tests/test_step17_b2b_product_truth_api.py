@@ -25,11 +25,14 @@ from __future__ import annotations
 import ast
 import asyncio
 import contextlib
+import copy
 import hashlib
 import json
 import logging
 import re
+import socket
 import types
+import urllib.request
 import uuid
 from collections.abc import Iterator
 from dataclasses import dataclass, replace
@@ -44,7 +47,7 @@ from app.api.v2 import product as product_api
 from app.domains.ai_gateway import gateway as ai_gateway
 from app.domains.alternatives import service as alternatives_service
 from app.domains.audit.models import AuditEvent
-from app.domains.b2b import credentials, quota
+from app.domains.b2b import access, credentials, quota
 from app.domains.b2b import truth as b2b_truth
 from app.domains.b2b.models import B2BApiClient, B2BApiKey, B2BApiUsageDaily
 from app.domains.commerce import partners as commerce_partners
@@ -71,6 +74,8 @@ from app.shared.database.base import Base
 from app.shared.database.sql import get_engine, get_sessionmaker
 from app.shared.observability.logging import OAuthRedactionFilter
 from app.shared.observability.sentry_privacy import scrub_event
+from app.shared.security import network
+from app.shared.security.rate_limit import FixedWindowLimiter
 from fastapi.exceptions import ResponseValidationError
 from sqlalchemy import event, func, select, text
 from sqlalchemy.exc import DBAPIError, IntegrityError
@@ -163,8 +168,10 @@ def rules(monkeypatch) -> Rules:
 @pytest.fixture(autouse=True)
 def _fresh_burst_state():
     quota.reset_burst_state()
+    quota.reset_auth_network_state()
     yield
     quota.reset_burst_state()
+    quota.reset_auth_network_state()
 
 
 @pytest.fixture
@@ -939,6 +946,75 @@ async def test_f_a_published_rule_citing_no_claim_is_not_distributed(app_client,
     assert (body["state"], body["reason"]) == ("not_enough_information", "evidence_unpublished")
 
 
+@pytest.mark.parametrize("sources", [
+    [],
+    [{"url": ""}],
+    [{"url": "   "}],
+    [{"url": "/relative/source"}],
+    [{"url": "javascript:alert(1)"}],
+    [{"url": "https:///missing-authority"}],
+    [{"url": "https://example.org/bad\npath"}],
+    [{"url": "https://example.org/white space"}],
+    [{"url": "https://example.org/good"}, {"url": "javascript:alert(1)"}],
+])
+async def test_f_a_negative_without_only_openable_sources_withholds_the_whole_answer(
+    app_client, db_clean, off_clean, admin, rules, monkeypatch, sources,
+):
+    await seed_world()
+    _, raw = await client_with_key(app_client, admin)
+    real_grade = shared_truth.grade
+
+    def grade_with_bad_source(product, ruleset):
+        graded = real_grade(product, ruleset)
+        payload = copy.deepcopy(graded.payload)
+        assert payload["negatives"] and payload["negatives"][0]["sources"]
+        template = payload["negatives"][0]["sources"][0]
+        payload["negatives"][0]["sources"] = [{**template, **source} for source in sources]
+        return replace(graded, payload=payload)
+
+    monkeypatch.setattr(shared_truth, "grade", grade_with_bad_source)
+    body = await ok(app_client, raw, GRADED)
+    assert (body["state"], body["reason"], body["truth"]) == (
+        "not_enough_information", "evidence_unpublished", None,
+    )
+
+
+@pytest.mark.parametrize("url", ["https://example.org/source", "http://example.org/source"])
+async def test_f_an_openable_source_remains_distributable_without_network(
+    app_client, db_clean, off_clean, admin, rules, monkeypatch, url,
+):
+    await seed_world()
+    _, raw = await client_with_key(app_client, admin)
+    real_grade = shared_truth.grade
+
+    def grade_with_openable_source(product, ruleset):
+        graded = real_grade(product, ruleset)
+        payload = copy.deepcopy(graded.payload)
+        assert payload["negatives"] and payload["negatives"][0]["sources"]
+        payload["negatives"][0]["sources"][0]["url"] = url
+        return replace(graded, payload=payload)
+
+    monkeypatch.setattr(shared_truth, "grade", grade_with_openable_source)
+    body = await ok(app_client, raw, GRADED)
+    assert body["state"] == "available"
+    assert body["truth"]["factors"]["negatives"][0]["sources"][0]["url"] == url
+
+
+async def test_f_openable_source_check_makes_no_outbound_request(monkeypatch):
+    def outbound_forbidden(*_args, **_kwargs):
+        raise AssertionError("source-shape validation must not perform a network request")
+
+    monkeypatch.setattr(socket, "getaddrinfo", outbound_forbidden)
+    monkeypatch.setattr(socket, "create_connection", outbound_forbidden)
+    monkeypatch.setattr(urllib.request, "urlopen", outbound_forbidden)
+    row = {
+        "rule": "grade.step1.nova",
+        "evidence": {"status": STATUS_PUBLISHED, "evidence_claim_ids": ["claim-id"]},
+        "sources": [{"url": "https://example.org/published-evidence"}],
+    }
+    assert b2b_truth._rests_on_published_rule(row)
+
+
 async def test_f_no_internal_reasoning_or_workflow_is_distributed(app_client, db_clean, off_clean, admin, rules):
     await seed_world()
     _, raw = await client_with_key(app_client, admin)
@@ -1081,9 +1157,90 @@ async def test_g_the_comparison_is_constant_time_whatever_was_found(app_client, 
 
 async def test_g_a_malformed_credential_never_reaches_the_database(app_client, db_clean, admin):
     with statements() as seen:
-        await ask(app_client, "not-a-key", GRADED)
-        await ask(app_client, None, GRADED)
+        await _expect_generic_401(await ask(app_client, "not-a-key", GRADED))
+        await _expect_generic_401(await ask(app_client, None, GRADED))
+    assert seen == []
+
+
+async def test_g_valid_shaped_unknown_key_has_one_indexed_lookup_and_generic_401(app_client, db_clean):
+    unknown = f"ggb_{'0' * 12}_{'a' * 64}"
+    with statements() as seen:
+        response = await ask(app_client, unknown, GRADED)
+    await _expect_generic_401(response)
+    lookups = [statement for statement in seen if "b2b_api_keys" in statement]
+    assert len(lookups) == 1
+    assert "key_prefix" in lookups[0]
+
+
+async def test_g_anonymous_network_limit_blocks_lookup_without_a_prefix_or_status_oracle(
+    app_client, db_clean, admin, monkeypatch,
+):
+    _, known = await client_with_key(app_client, admin)
+    unknown = f"ggb_{'0' * 12}_{'a' * 64}"
+    monkeypatch.setattr(quota, "AUTH_NETWORK_PER_IP_PER_MINUTE", 2)
+    monkeypatch.setattr(quota, "AUTH_NETWORK_GLOBAL_PER_MINUTE", 10)
+    await _expect_generic_401(await ask(app_client, unknown, GRADED))
+    await _expect_generic_401(await ask(app_client, unknown, GRADED))
+
+    async def authentication_must_not_run(*_args, **_kwargs):
+        raise AssertionError("network-limited requests must not reach database authentication")
+
+    monkeypatch.setattr(access, "authenticate", authentication_must_not_run)
+    with statements() as seen:
+        blocked_unknown = await ask(app_client, unknown, GRADED)
+        blocked_known = await ask(app_client, known, GRADED)
+        malformed = await ask(app_client, "not-a-key", GRADED)
     assert not any("b2b_api_keys" in statement for statement in seen)
+    await _expect_generic_401(malformed)
+    for response in (blocked_unknown, blocked_known):
+        assert response.status_code == 429
+        assert response.json()["detail"]["code"] == "B2B_RATE_LIMITED"
+        assert 1 <= int(response.headers["Retry-After"]) <= 60
+    assert blocked_unknown.json()["detail"]["message"] == blocked_known.json()["detail"]["message"]
+
+
+async def test_g_global_network_limit_bounds_distinct_addresses_and_spoofed_leftmost_forwarding(
+    app_client, db_clean, monkeypatch,
+):
+    monkeypatch.setattr(network, "TRUSTED_PROXY_HOPS", 1)
+    monkeypatch.setattr(quota, "AUTH_NETWORK_PER_IP_PER_MINUTE", 2)
+    monkeypatch.setattr(quota, "AUTH_NETWORK_GLOBAL_PER_MINUTE", 3)
+    unknown = f"ggb_{'0' * 12}_{'a' * 64}"
+    for leftmost in ("198.51.100.1", "198.51.100.2"):
+        await _expect_generic_401(await ask(
+            app_client, unknown, GRADED,
+            headers={"X-Forwarded-For": f"{leftmost}, 203.0.113.9"},
+        ))
+    with statements() as seen:
+        spoofed = await ask(app_client, unknown, GRADED,
+                            headers={"X-Forwarded-For": "198.51.100.3, 203.0.113.9"})
+    assert spoofed.status_code == 429
+    assert not any("b2b_api_keys" in statement for statement in seen)
+    assert set(quota._auth_network_limiter.state) == {"global", "ip:203.0.113.9"}
+    # Reset only the admission buckets to isolate the second bound: distinct
+    # trusted addresses cannot collectively exceed the global lookup budget.
+    quota.reset_auth_network_state()
+    for address in ("203.0.113.10", "203.0.113.11", "203.0.113.12"):
+        await _expect_generic_401(await ask(
+            app_client, unknown, GRADED,
+            headers={"X-Forwarded-For": f"198.51.100.4, {address}"},
+        ))
+    with statements() as seen:
+        globally_blocked = await ask(
+            app_client, unknown, GRADED,
+            headers={"X-Forwarded-For": "198.51.100.5, 203.0.113.13"},
+        )
+    assert globally_blocked.status_code == 429
+    assert not any("b2b_api_keys" in statement for statement in seen)
+
+
+async def test_g_anonymous_network_limiter_has_a_finite_table(monkeypatch):
+    monkeypatch.setattr(quota, "_auth_network_limiter", FixedWindowLimiter(
+        window_seconds=60, max_per_window=100, max_keys=2,
+    ))
+    assert quota.auth_network_retry_after("203.0.113.1") is None
+    assert quota.auth_network_retry_after("203.0.113.2") is not None
+    assert len(quota._auth_network_limiter.state) == 2
 
 
 # ===========================================================================

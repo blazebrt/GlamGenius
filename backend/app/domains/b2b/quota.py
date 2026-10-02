@@ -1,13 +1,18 @@
 """How many answers a B2B client may have. Never what any answer says.
 
-Two limits, checked in this order, both before any Product Truth work:
+Three limits, checked in this order, all before any Product Truth work:
 
-1. **Burst** — requests per minute, per client, in this web process. The
+1. **Network admission** — valid-shaped credentials only, before database
+   authentication: 1,200/minute per trusted client IP and 2,400/minute for
+   this web process. The key table is finite. This bounds anonymous indexed
+   lookups without making a customer quota or changing an answer.
+
+2. **Burst** — requests per minute, per client, in this web process. The
    shared :class:`~app.shared.security.rate_limit.FixedWindowLimiter`, keyed by
    the client's id (never by anything the caller sends, never by the secret),
    with each client's own ceiling.
 
-2. **Daily allowance** — requests per UTC day, per client, in PostgreSQL. One
+3. **Daily allowance** — requests per UTC day, per client, in PostgreSQL. One
    atomic statement takes one unit or refuses::
 
        INSERT ... VALUES (client, today, 1)
@@ -41,6 +46,18 @@ from app.domains.b2b.models import MAX_REQUESTS_PER_MINUTE
 from app.shared.security.rate_limit import FixedWindowLimiter
 
 BURST_WINDOW_SECONDS = 60.0
+AUTH_NETWORK_PER_IP_PER_MINUTE = 1_200
+AUTH_NETWORK_GLOBAL_PER_MINUTE = 2_400
+AUTH_NETWORK_MAX_KEYS = 4_096
+
+# Admission is before the indexed API-key lookup. The global key caps total
+# anonymous lookup work even when callers arrive from many network addresses.
+_auth_network_limiter = FixedWindowLimiter(
+    window_seconds=BURST_WINDOW_SECONDS,
+    max_per_window=AUTH_NETWORK_PER_IP_PER_MINUTE,
+    max_keys=AUTH_NETWORK_MAX_KEYS,
+)
+_AUTH_GLOBAL_KEY = "global"
 
 #: One process-wide table of per-client buckets. ``max_per_window`` is only the
 #: fallback; every hit passes the client's own ceiling.
@@ -64,6 +81,21 @@ def burst_retry_after(client_id: uuid.UUID, requests_per_minute: int) -> int | N
     if _burst_limiter.hit(key, limit=requests_per_minute):
         return _burst_limiter.retry_after_seconds(key)
     return None
+
+
+def auth_network_retry_after(address: str | None) -> int | None:
+    """Bound valid-shaped credentials before they can cause a database lookup."""
+    if _auth_network_limiter.hit(_AUTH_GLOBAL_KEY, limit=AUTH_NETWORK_GLOBAL_PER_MINUTE):
+        return _auth_network_limiter.retry_after_seconds(_AUTH_GLOBAL_KEY)
+    key = f"ip:{address or '<unknown>'}"
+    if _auth_network_limiter.hit(key, limit=AUTH_NETWORK_PER_IP_PER_MINUTE):
+        return _auth_network_limiter.retry_after_seconds(key)
+    return None
+
+
+def reset_auth_network_state() -> None:
+    """For tests: forget anonymous network admission buckets."""
+    _auth_network_limiter.reset()
 
 
 def reset_burst_state() -> None:
@@ -139,11 +171,16 @@ async def seconds_until_daily_reset(session: AsyncSession) -> int:
 
 
 __all__ = [
+    "AUTH_NETWORK_GLOBAL_PER_MINUTE",
+    "AUTH_NETWORK_MAX_KEYS",
+    "AUTH_NETWORK_PER_IP_PER_MINUTE",
     "BURST_WINDOW_SECONDS",
     "acquire_daily",
+    "auth_network_retry_after",
     "burst_retry_after",
     "record_outcome",
     "record_rate_limited",
+    "reset_auth_network_state",
     "reset_burst_state",
     "seconds_until_daily_reset",
     "utc_today",
