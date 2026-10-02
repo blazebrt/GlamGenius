@@ -67,10 +67,17 @@ Gross_profit = recognized_revenue - AI_cost - Serving_cost - Support_cost
 Gross_margin = Gross_profit / recognized_revenue  (only if revenue > 0)
 ```
 
-The app has an estimated AI cost ledger and configurable per-token estimates,
-not a verified provider invoice. Reconcile it to invoices, model mix and
-fallbacks before using it for pricing or gross margin. Do not put these
-scenario assumptions into runtime configuration.
+The existing estimated AI ledger covers **Gateway-backed `run_structured()`
+calls only**. The direct `/scan/analyse` Gemini path persists `Scan` outcomes
+but does not supply Gateway token/cost rows or consume its hourly allowance;
+it has separate monthly scan reservation/idempotency semantics. Current
+per-scan and per-consumer AI cost therefore **cannot be treated as complete**
+until direct calls are reconciled with provider invoice/usage evidence or
+the path is safely unified in a separately reviewed runtime milestone. The
+Gateway's configurable per-token estimates are not a verified provider
+invoice. Reconcile model mix, retries and fallbacks before pricing or margin
+claims. Do not put scenario assumptions into runtime configuration or infer
+missing spend from invented numbers.
 
 | Unit | Numerator / denominator | Scope and required measurement |
 | --- | --- | --- |

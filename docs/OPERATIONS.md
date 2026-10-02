@@ -1,14 +1,17 @@
 # Running GlamGenius
 
-**CURRENT operational authority begins at [Render Pre-PMF Runtime (zero cost)](#render-pre-pmf-runtime-zero-cost).**
+**CURRENT deployment authority begins at [Render Pre-PMF Runtime (zero cost)](#render-pre-pmf-runtime-zero-cost).**
 Checked against repository `main` `485729ab3ddba92c53257e7eea7fa2876212e3f7`
 on 2026-10-02; verify the exact deployed SHA and live provider settings
-before any production action. Sections 1–7 and the Step 8I historical
-activation record below were written for earlier host/V2/V3 arrangements.
-They are retained for provenance, **not live procedures**: do not infer an
+before any production action. Sections 1–7 are historical host/V2/V3 topology
+guidance, retained for provenance, **not live procedures**: do not infer an
 always-on Celery worker, host systemd/cron, paid PITR or the retired Personal
-Appearance product from them. The live section is the one deployment
-procedure; [scale readiness](operations/SCALE_READINESS_AND_SLOS.md) records
+Appearance product from them. Section 8 is **current but domain-specific**:
+it defines the governed lifecycle only for the exact reviewed Step 8I pack.
+It is not a deployment procedure or permission to perform Phase B. The Render
+section is the one current deployment procedure. **Phase B execution remains
+prohibited unless Raj explicitly authorizes it.**
+[Scale readiness](operations/SCALE_READINESS_AND_SLOS.md) records
 unverified capabilities and future gates, and [architecture authority](architecture/ARCHITECTURE_AUTHORITY.md)
 classifies related documents.
 
@@ -348,6 +351,14 @@ rejects the environment, the report repeats its reason verbatim and reports
 ---
 
 ## 8. First governed skin-care knowledge activation
+
+**CURRENT / DOMAIN-SPECIFIC AUTHORITY FOR THE EXACT STEP 8I PACK ONLY.** This
+section preserves its human identity review, verification/approval/publication,
+human personal-applicability and release review, explicit approval, and
+exact-ID/hash activation contract. It is separate from deployment and grants
+no execution permission. **Do not run any Phase B operation or publish evidence
+without Raj's separate explicit authorization.** The current deployment
+authority is [Render Pre-PMF Runtime](#render-pre-pmf-runtime-zero-cost).
 
 The first time GlamGenius tells a customer BUY, it will be because an operator
 ran the steps below, in order, by hand. Nothing here happens on deploy, on

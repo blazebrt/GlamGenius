@@ -10,9 +10,13 @@ may perform several roles. That does not collapse independent approval rights.
 ## Decision rights that do not move with revenue
 
 - Product Truth / Science owns evidence admission, uncertainty, rule validity,
-  category interpretation and scientific release approval. It may refuse an
-  unsafe or unsupported commercial request. A second qualified reviewer is
-  required before a governed scientific activation; if unavailable, defer it.
+  category interpretation and governed scientific release review. It may
+  refuse an unsafe or unsupported commercial request. **NOW**, publication
+  follows all five gates in the [Product Constitution](../../PRODUCT_CONSTITUTION.md),
+  including the founder opening the source and confirming its number, plus
+  the existing exact-pack [Step 8I activation lifecycle](../OPERATIONS.md#8-first-governed-skin-care-knowledge-activation).
+  Neither authority currently makes a second distinct qualified human
+  reviewer mandatory for every activation.
 - Security / Privacy owns access, retention, breach triage and data-purpose
   review, with a stop right on privacy or security risk. Legal counsel owns
   regulated advice; this document is not a legal opinion.
@@ -26,9 +30,15 @@ may perform several roles. That does not collapse independent approval rights.
 - Finance owns definitions, margin measurement and spend approval; ARR or a
   contract cannot override a safety gate.
 
-When one person occupies multiple roles, log the decision, conflict and
-independent review required. If no independent reviewer is available, do not
-promote the affected scientific release or accept a contract requiring it.
+When one person occupies multiple roles, record which constitutional and
+governed-lifecycle gates they completed and any conflict. Do not silently
+replace the founder's source-confirmation step or add a new universal NOW
+veto. **NEXT — trigger required:** formally adopt a second independent
+qualified human reviewer or expert panel when release volume exceeds one
+person's safe capacity, methodology or category risk grows, evidence disputes
+repeat, regulatory/enterprise obligations require it, or founder key-person
+risk becomes unacceptable. Once that future two-person control is approved
+and activated, an affected release waits if its required reviewer is absent.
 
 ## Five triggered operating stages
 
@@ -48,7 +58,7 @@ hold multiple letters; the veto boundaries above still apply.
 
 | Decision | Founder/CEO | Product | Truth/Science | Platform/Data | Security/Privacy | Growth/Commerce | B2B/Success | Finance/Legal |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| Evidence and scientific-rule activation | I | C | A/R | R for controlled release | C, stop right | I | I | C for claims |
+| Evidence and scientific-rule activation | R for Constitution-required source opening and number confirmation | C | A/R for governed evidence/release review | R only for controlled technical execution | C, stop right | I | I | C for claims |
 | Product UX and customer copy | I | A/R | C, stop right on scientific claims | C | C, stop right on data use | C | C | C for legal claims |
 | Partner link and commercial contract | A for material commitment | C | C, stop right on Product Truth | C | C | R | R | A for economics/legal terms |
 | Runtime topology, migration, rollback | I | C | C on truth impact | A/R | C, stop right | I | I | C on spend |
@@ -61,11 +71,12 @@ Science approval must be traceable to source, version, review and rollback.
 Commercial colleagues can propose a research question but cannot queue or
 force an automatic approval. A B2B client receives the same governed Product
 Truth as a consumer; entitlement and transport may differ, truth may not.
-When evidence volume or rule-change risk outgrows one qualified reviewer's
-capacity, establish an expert panel and a regulatory/compliance reviewer;
-record conflicts of interest, recusal, methodology-change approval and
-independent sign-off before publication. A coding team alone is not the
-scientific authority.
+When the NEXT trigger above is met and the new control is formally activated,
+establish an independent qualified reviewer or expert panel and, where the
+risk warrants it, a regulatory/compliance reviewer. Record conflicts of
+interest, recusal, methodology-change approval and that control's sign-off.
+This is not a retroactive condition on the current Step 8I process. A coding
+team alone is not the scientific authority.
 
 ## Triggered hiring sequence, not a vanity chart
 

@@ -45,7 +45,10 @@ Expo mobile / web ──HTTPS──→ one Render Singapore free Docker web serv
                              FastAPI modular monolith, one uvicorn process
                              ├─ consumer /api/v2; B2B /api/b2b/v1
                              ├─ Product Truth, Purchase OS, Commerce
-                             ├─ AI Gateway ──→ Gemini (extraction only)
+                             ├─ governed structured AI callers
+                             │    └─ AI Gateway/run_structured() ──→ Gemini
+                             ├─ legacy POST /api/v2/scan/analyse
+                             │    └─ Gemini adapter directly (Gateway bypass)
                              ├─ Supabase Auth/JWKS + private Storage
                              ├─ Store B Supabase PostgreSQL (SQLAlchemy)
                              ├─ Store A distinct Supabase DB / OFF
@@ -79,10 +82,17 @@ error and hidden bound SQL parameters. Store A has separate metadata,
 connection and export/field allowlist; production config refuses equal URLs.
 Supabase Auth is verified through issuer/JWKS on the backend; Storage is
 private/server-side. These are code/config claims, **not** verification of
-provider project settings. AI Gateway records a run and validated output,
-uses a bounded provider timeout/model fallback and carries token/estimated
-cost fields; it is not scientific authority. Sentry is crash/error only,
-without performance tracing. Request IDs, logging redaction and Sentry
+provider project settings. **The Gateway is not universal:** governed
+structured callers use `run_structured()`, which records `ai_runs` and
+validated `ai_run_outputs`, provider/model, prompt/schema version, latency,
+token counts when supplied, estimated cost and an authenticated hourly AI
+allowance. The legacy `POST /api/v2/scan/analyse` calls the Gemini adapter
+directly. It has its own monthly beta-scan reservation, idempotency and `Scan`
+result persistence; successful rows record provider/model, `scan.v2` prompt,
+`scan.v1` schema and latency. Direct calls do **not** receive Gateway
+`ai_runs` token/cost accounting or its hourly allowance. This is a current
+measurement and execution-contract exception, not a new scientific authority.
+Sentry is crash/error only, without performance tracing. Request IDs, logging redaction and Sentry
 scrubbing are current controls.
 
 `app.workers.account_deletion.run_cycle` and
@@ -118,7 +128,7 @@ already paging on it. Detailed incident actions are in
 | Store A / OFF DB or upstream OFF | Consumer OFF fallback/coverage degrades; no OFF values may be fabricated or persisted in B. B2B confirmed-label path remains separately governed. | OFF lookup logs, ODbL tests; show safe insufficient state where needed, repair distinct store. | Sustained fallback failure or licensed-data freshness breach → improve ingestion/availability without joining stores. |
 | Supabase Auth/JWKS | New authentication fails or is unavailable; do not accept unverifiable tokens. | 401/5xx class and readiness/config; provider recovery and controlled key rotation. | Repeated auth SLO burn/contract obligation → redundancy and rotation drill. |
 | Supabase Storage | Upload/media access and deletion purge degrade; text-safe paths may continue; deletion must not claim completion without purge proof. | Storage/readiness and deletion state/errors; repair access then resume idempotently. | Backlog/restore failure or storage growth → approved tier and media lifecycle review. |
-| Gemini | Photo extraction unavailable; deterministic truth from verified data must not be replaced by AI guess. | AI run status, timeout, token/estimated-cost ledger; bounded retry/fallback only within verified schema. | Provider saturation/failure or unit-cost breach → concurrency budget/approved alternate quality-tested model. |
+| Gemini | Photo analysis/extraction unavailable; deterministic truth from verified data must not be replaced by AI guess. | Gateway `ai_runs`/outputs for structured callers; direct `/scan/analyse` `Scan` status/latency but no Gateway token/cost ledger. Reconcile provider usage before cost claims; preserve each path's bounded failure semantics. | Provider saturation/failure or verified unit-cost breach → concurrency budget/approved alternate quality-tested model. |
 | Expo Push | Proactive notification degrades, Product Truth stays up; no late catch-up blast. | Delivery outcomes and heartbeat; fix credentials/provider, preserve final-send authority. | Persistent miss rate or send backlog → separate executor with same idempotency. |
 | Supabase Cron/pg_net/Vault | Deletion/notification cycles missed; Product Truth unaffected immediately, privacy risk grows with deletion lag. | `cron.job_run_details`, `net._http_response`, worker heartbeat; repair token/schedule, bounded manual run only by operator. | Cycle near interval, missed heartbeat or deletion SLO breach → dedicated execution. |
 | Sentry | Crash telemetry lost; API truth must not depend on telemetry. | DSN/init status and independent health/logs; repair integration. | Incident detection gap → privacy-safe metrics, not unbounded event capture. |
@@ -165,7 +175,7 @@ quoted and approved, never a price claim.
 | One managed Store B primary | Pool use, CPU, locks, query p95, bloat | Sustained 70% verified budget | Sustained 85% or errors | Larger primary if query/index work fails | Connection discipline then rehearsed upgrade | Prior compatible config if capacity permits | `ΔC_db` | Data + platform |
 | Primary-only reads | Read load, replica lag tolerance | Read-induced write SLO burn | Verified stale-tolerant read workload still impacts primary | Read replica for eligible reads only | Prove fresh truth, quota and deletion never route there | Return reads to primary | `C_replica` | Data + Product Truth |
 | Ordinary large tables | Size/growth, vacuum, query plan | Repeated bloat/query regression | Index/retention optimization insufficient | Selective partition | Backfill and dual-read proof for one table | Compatible old read path | `C_migration` | Data |
-| Direct AI calls | Concurrency, timeout/429, token cost | 70% quota or cost budget | Sustained provider errors/contract breach | Bounded budget and verified fallback; queue only if UX permits | Semaphore, measured retry and quality evaluation | Governed unavailable answer | `C_ai` | AI + Product Truth |
+| Split AI paths | Gateway and direct-route concurrency, timeout/429; provider-invoice cost | Cost coverage incomplete or 70% verified quota/budget | Sustained provider errors/contract breach | Bounded budget and a reviewed single execution authority only if safe | Reconcile direct route first; any unification needs separate contract tests | Preserve current route semantics and governed unavailable answer | `C_ai` | AI + Product Truth |
 | Logs/request IDs/Sentry | Detection delay, missing attribution | Incident cannot be diagnosed | Repeated SLO miss or enterprise evidence gap | Safe aggregate metrics; tracing only for multiple services | Scrubbed instrumentation and access review | Disable new telemetry, not API | `C_obs` | Reliability + privacy |
 | Manual B2B operations | Clients, support load, rotation and incident obligations | Repeated manual error | Contracted response unmet | Controlled report, staffed on-call | Audited runbook and limited pilot | Keep V1; suspend pilots | `C_support` | B2B + security |
 
@@ -261,20 +271,31 @@ this document is not a legal determination.
 
 ## AI and observability evolution
 
-**NOW:** the gateway's ledger records provider/model, validated schema,
-latency, token counts when returned, and an *estimate* using configurable
-input/output rates; defaults are not verified provider invoices. The Gemini
-adapter has timeout and a configured fallback chain; an AI failure returns
-governed unavailability, never invented science. Measure actual calls per
-scan, retry/failure rate and tokens before budgeting. No prompt/output or
-health facts in default telemetry.
+**NOW:** `run_structured()` records Gateway-backed attempts and validated
+outputs with provenance, latency, token counts when returned and an
+*estimate* using configurable input/output rates; defaults are not verified
+provider invoices. The direct `/scan/analyse` Gemini route instead persists
+`Scan` status and successful-result provider/model/prompt/schema/latency, with
+its own monthly reservation and idempotency. It does not write the Gateway
+token/cost ledger or consume its hourly allowance. The Gemini adapter has a
+bounded timeout and configured fallback chain, but **current total AI cost
+and per-scan cost coverage are incomplete** until direct usage is reconciled
+with provider invoice/usage evidence. Measure calls, retries and failures on
+both paths before budgeting. No prompt/output or health facts in default
+telemetry. The Gateway module's universal-call docstring is known internal
+documentation debt; Step 18 does not change it or runtime code.
 
 **NEXT — trigger required:** cap concurrent calls and retries per account
 and globally, respect provider quotas, bound total request time and money,
 consider circuit breaking when measured outages create retry storms, and
 deduplicate only where account/privacy/label authority makes it safe.
 Alternative models require extraction-contract quality tests and explicit
-approval; a cheaper silent substitution is not cost optimization. B2B
+approval; a cheaper silent substitution is not cost optimization. A future
+single governed AI execution authority is a **separate reviewed runtime
+milestone**: routing `/scan/analyse` through `run_structured()` could alter
+the hourly allowance versus monthly scan allowance, idempotency, run
+recording, failure persistence, provider errors and provenance. Do not make
+that substitution as an architecture-document cleanup. B2B
 Product Truth should have **zero AI calls**; investigate any nonzero value.
 
 Observability progression is structured redacted logs/request IDs → safe

@@ -15,7 +15,8 @@ current promise to a customer.
 
 Current observed capability is limited to passing exact-head CI and code
 properties: one free API instance, health/readiness, request IDs, redacted
-logs, worker heartbeats, AI ledger and B2B usage counters. There is no
+logs, worker heartbeats, the **Gateway-backed** AI ledger, direct-route `Scan`
+rows and B2B usage counters. There is no
 verified production SLO measurement history. Free hosting has no external SLA.
 
 The table contains **proposed planning targets** for a future rolling 30-day
@@ -34,7 +35,7 @@ and capacity evidence.
 | Critical writes | Eligible writes committed ≥99.9%; p95 ≤2s per route class after baseline. | Atomicity, idempotency, account isolation, privacy invariants. | DB commit/errors and regression tests → lock/pool metrics; alert on repeated failures or invariant breach. |
 | Scheduled deletion | Accepted requests reach verified complete state within a **proposed 24h** objective; cycle every 5 min, heartbeat age ≤10 min when work exists. | No false completion while bytes/Auth identity remain; no cross-account erasure. | Job state/age, `cron.job_run_details` + `net._http_response` + heartbeat; page on stuck/false-complete risk. |
 | Notifications | Due and opted-in sends attempted in their valid hour ≥99% once measured; cycle hourly, heartbeat age ≤2h. | No duplicate or post-opt-out send; never late catch-up blast. | Delivery/worker outcomes and provider acceptance; alert on missed hour/backlog or final-send invariant. |
-| AI-assisted scan/extraction | Eligible attempts return validated extraction or explicit unavailable ≥99%; p95 ≤15s is a **proposal**, not provider promise. | Schema/provenance validation; no invented science or silent weaker model. | AI run ledger: timeout/failure/latency/tokens; alert on sustained provider errors, budget exceedance or invalid output. |
+| AI-assisted scan/extraction | Gateway-backed eligible attempts return validated output or explicit unavailable; direct `/scan/analyse` returns its persisted analysis or explicit failure. Proposed success ≥99% and p95 ≤15s are **not** provider promises; baseline the paths separately. | Gateway schema/provenance validation; direct route currently parses a JSON object under its own contract. No invented science or silent weaker model. | Gateway-backed paths: `ai_runs`/`ai_run_outputs` provide latency, token/cost estimate and provenance evidence. Direct `/scan/analyse`: `Scan` rows provide status and successful-result provider/model/prompt/schema/latency, but no Gateway token/cost accounting. Reconcile provider usage; alert on errors or invalid output. |
 | Commerce handoff | Eligible handoff route success ≥99.5%; p95 ≤2s, external merchant navigation measured separately. | Commerce never changes grade/verdict or ranks for payout; outbound open ≠ purchase. | Handoff outcome and CI independence tests; alert on steering/integrity breach or high 5xx. |
 
 `error_budget = eligible_opportunities × (1 - target_fraction)` for the
@@ -49,8 +50,11 @@ remedies, measurement and support capacity.
 ## Safe metrics contract and review cadence
 
 **NOW:** inventory existing route status/request IDs, Sentry crashes, worker
-heartbeats, deletion states, AI run counts/tokens, B2B counters and CI run
-results. Record measurement gaps; do not claim SLO compliance from tests.
+heartbeats, deletion states, Gateway AI run counts/tokens, direct-route `Scan`
+outcomes, B2B counters and CI run results. **Current gap:** direct
+`/scan/analyse` bypasses Gateway token/cost accounting; neither its per-scan
+cost nor complete AI spend is proven by the `ai_runs` ledger. Record gaps; do
+not claim SLO compliance or complete cost coverage from tests.
 **NEXT — trigger required:** low-cardinality aggregate counters/histograms for
 route class, status class, latency, DB pool checkout/usage, query/lock time,
 scheduled cycle duration and age, AI latency/failure/tokens/estimated versus
@@ -166,7 +170,7 @@ is incomplete; `Monitored` means code controls exist but live proof is needed.
 | 5 Multi-replica limiter mismatch/B2B abuse | In-process limits; one process now; likelihood conditional, high contractual/security impact. | Replica plan, 429 fairness and usage → shared admission **before** replica 2. | Security + B2B / open future gate. |
 | 6 Deletion/privacy backlog | HTTP Cron, persisted deletion state; likelihood unknown, critical privacy impact. | Cron HTTP + heartbeat + oldest job → improve cycle, then separate executor when lag breaches objective. | Privacy + platform / monitored. |
 | 7 Scheduler/notification dependency | Supabase Cron/pg_net/Vault and Expo Push; likelihood unknown, medium/high impact. | Missed run, send/lag metrics → recover schedule/provider; no late catch-up. | Reliability / monitored. |
-| 8 AI/Gemini concentration and cost | Single provider gateway/fallback, estimated-cost fields; likelihood unknown, medium/high impact. | Timeout/429/tokens/invoice comparison → budget and quality-tested alternate only when justified. | AI + Product Truth / monitored. |
+| 8 AI/Gemini concentration, split execution and cost gap | Gateway-backed ledger/fallback plus direct `/scan/analyse` Gemini path without Gateway token/cost rows; likelihood unknown, medium/high impact. | Compare Gateway and `Scan` outcomes with provider usage/invoice; budget and quality-tested alternate only when justified. Any unification needs a separate allowance/idempotency/failure/provenance review. | AI + Product Truth / open measurement gap. |
 | 9 Store A/OFF coverage or source freshness | Distinct DB and external source; likelihood unknown, medium trust impact. | Lookup/coverage/freshness → safe insufficient state, licensed ingestion review. | Data + science / monitored. |
 | 10 Node-forge expiry | Exact governed exception expires 2026-10-16; certain deadline, security/CI impact. | Scheduled audit gate and 2026-10-09 review → official fix/removal; never extend silently. | Security / open time-bound. |
 | 11 B2B credential/support/enterprise gap | V1 key/quota design, no external SLA; likelihood conditional, high contract impact. | Key events/usage and client pipeline → rotation, support and readiness evidence before commitments. | B2B + security / open. |
