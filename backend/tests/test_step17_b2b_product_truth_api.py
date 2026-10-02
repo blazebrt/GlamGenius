@@ -1187,9 +1187,26 @@ async def test_h_issuance_always_returns_a_new_secret_and_only_once(app_client, 
 
 
 async def test_h_no_log_line_carries_the_key_or_the_authorization_header(app_client, db_clean, off_clean, admin, rules,
-                                                                         caplog):
+                                                                         caplog, monkeypatch):
+    """What application code hands to a logger, read before any handler filter runs.
+
+    The log filter would redact a key on the way out; this proves no key is
+    handed to a logger in the first place, so the filter is a second line, not
+    the only one.
+    """
     await seed_world()
     caplog.set_level(logging.DEBUG)
+    handed: list[str] = []
+    real_handle = logging.Logger.handle
+
+    def capture(self, record):
+        try:
+            handed.append(f"{record.name} {record.getMessage()}")
+        except Exception:  # noqa: BLE001 - a malformed record is still evidence
+            handed.append(f"{record.name} {record.msg} {record.args!r}")
+        return real_handle(self, record)
+
+    monkeypatch.setattr(logging.Logger, "handle", capture)
     client, raw = await client_with_key(app_client, admin)
     await ok(app_client, raw, GRADED)
     await ask(app_client, raw, "1234")
@@ -1200,13 +1217,11 @@ async def test_h_no_log_line_carries_the_key_or_the_authorization_header(app_cli
     await ask(app_client, raw, GRADED)
     secret = raw.split("_")[2]
     key_hash = hashlib.sha256(raw.encode()).hexdigest()
-    logged = "\n".join(f"{record.getMessage()} {record.args!r}" for record in caplog.records)
+    logged = "\n".join(handed)
     assert raw.split("_")[1] in logged, "the public prefix is the traceable identifier"
-    for leaked in (raw, secret, key_hash, f"Bearer {raw}", wrong, wrong.split("_")[2]):
+    for leaked in (raw, secret, key_hash, f"Bearer {raw}", wrong, wrong.split("_")[2], "ggb_"):
         assert leaked not in logged
-    assert GRADED not in "\n".join(r.getMessage() for r in caplog.records if r.name.startswith("app.")), (
-        "no barcode in B2B logs"
-    )
+    assert GRADED not in "\n".join(line for line in handed if line.startswith("app.")), "no barcode in B2B logs"
 
 
 def test_h_the_log_filter_and_sentry_redact_any_b2b_key():
