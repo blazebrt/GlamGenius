@@ -6,11 +6,11 @@ two phones choosing one id overwrote each other's photograph, a replay wrote
 its bytes before discovering the report already existed, and the global
 namespace sat outside account erasure. Here, against PostgreSQL 16:
 
-* K — the object key is server-owned: the report's own UUID, in the claimed
-  account's canonical prefix or an anonymous device-scoped namespace
+* K — the object key is server-owned: the report's own UUID, in the
+  signed-in account's canonical prefix or an anonymous device-scoped namespace
 * I — idempotency is resolved before any byte, and serialised across retries
-* L — a claimed device's report and the account's deletion request serialise
-  on the account row, exactly as a media upload does
+* L — a signed-in report and the account's deletion request serialise on
+  the account row, exactly as a media upload does
 * E — erasure removes legacy global report photos before the row cascade, and
   resolves historically collided keys in favour of privacy
 * C — ordinary failures compensate rather than orphan
@@ -233,11 +233,19 @@ async def _device_id(headers) -> uuid.UUID:
         )).scalar_one()
 
 
-async def _report(app_client, phone, client_report_id, photo: bytes | None = PHOTO_A, **fields):
+async def _report(
+    app_client, phone, client_report_id, photo: bytes | None = PHOTO_A, *, token: str | None = None, **fields,
+):
+    """File a report from ``phone``, signed in as ``token``'s account when given.
+
+    Only the bearer token makes a report anybody's (audit lane 1, F03); the
+    device token alone files an anonymous report, whoever claimed the phone.
+    """
     data = {"client_report_id": client_report_id, "subject": "Sugar per 100 g", "reason": "wrong_number",
             "barcode": "8905000000010", **fields}
     files = {"photo": ("label.jpg", photo, "image/jpeg")} if photo is not None else None
-    return await app_client.post(REPORT, headers=phone, data=data, files=files)
+    headers = {**phone, **(auth(token) if token else {})}
+    return await app_client.post(REPORT, headers=headers, data=data, files=files)
 
 
 async def _rows(**where) -> list[LabelErrorReport]:
@@ -304,8 +312,8 @@ async def test_k_a_two_accounts_with_one_client_report_id_keep_two_photographs(
     token_b, account_b = await registered_supabase_user()
     phone_a = await _phone(app_client, token_a)
     phone_b = await _phone(app_client, token_b)
-    first = await _report(app_client, phone_a, "same-id-two-accounts", PHOTO_A)
-    second = await _report(app_client, phone_b, "same-id-two-accounts", PHOTO_B)
+    first = await _report(app_client, phone_a, "same-id-two-accounts", PHOTO_A, token=token_a)
+    second = await _report(app_client, phone_b, "same-id-two-accounts", PHOTO_B, token=token_b)
     row_a, row_b = await _row(first.json()["report_id"]), await _row(second.json()["report_id"])
     assert storage.objects[row_a.photo_key] == PHOTO_A
     assert storage.objects[row_b.photo_key] == PHOTO_B
@@ -318,13 +326,22 @@ async def test_k_d_a_claimed_phones_photo_lives_under_its_account_prefix(
 ):
     token, account_id = await registered_supabase_user()
     phone = await _phone(app_client, token)
-    response = await _report(app_client, phone, "claimed-report")
+    response = await _report(app_client, phone, "claimed-report", token=token)
     assert response.status_code == 201, response.text
     row = await _row(response.json()["report_id"])
     assert row.account_id == account_id
     assert row.photo_key == f"{account_prefix(account_id)}/label-reports/{row.id}.jpg"
     assert storage.objects[row.photo_key] == PHOTO_A
     assert storage.puts == [row.photo_key]
+
+    # Audit lane 1, F03: the same claimed phone, signed out. The claim is not
+    # authority: the report is anonymous and its photo device-scoped.
+    device_id = await _device_id(phone)
+    signed_out = await _report(app_client, phone, "claimed-phone-signed-out", PHOTO_B)
+    assert signed_out.status_code == 201, signed_out.text
+    anonymous = await _row(signed_out.json()["report_id"])
+    assert anonymous.account_id is None
+    assert anonymous.photo_key == f"label-reports/devices/{device_id}/{anonymous.id}.jpg"
 
 
 async def test_k_e_an_anonymous_phones_photo_is_device_scoped_and_claims_no_account(
@@ -449,7 +466,7 @@ async def test_l_f_deletion_first_the_report_writes_no_byte_and_no_row(
     try:
         holder = await _pid(requesting)
         await deletion_service.request_deletion(requesting, account_id)  # held, uncommitted
-        report = race.spawn(_report(app_client, phone, "deletion-wins"))
+        report = race.spawn(_report(app_client, phone, "deletion-wins", token=token))
         await _until_something_waits_on(holder)
         assert not report.done() and storage.puts == []
         await requesting.commit()
@@ -470,7 +487,7 @@ async def test_l_g_report_first_the_deletion_waits_then_erases_it(
     token, account_id = await registered_supabase_user()
     phone = await _phone(app_client, token)
     storage.put_pause = race.pause()
-    report = race.spawn(_report(app_client, phone, "report-wins"))
+    report = race.spawn(_report(app_client, phone, "report-wins", token=token))
     await storage.put_pause.wait_reached()  # past the lifecycle hold, mid-write
 
     requesting = _factory()()
@@ -514,12 +531,16 @@ async def test_l_a_waiting_report_holds_no_device_row_the_account_delete_needs(
     while it waited for the account would be one half of a deadlock. Here the
     report is stopped exactly at the account hold and the whole worker cycle,
     DELETE included, must run to completion past it.
+
+    The report is signed in (only a bearer token makes a report an account's),
+    so it is stopped at the hold first and the deletion is requested while it
+    waits there: an account whose deletion was already requested is refused
+    by authentication before any lock, which proves nothing about the order.
     """
     from app.domains.identity import service as identity_service
 
     token, account_id = await registered_supabase_user()
     phone = await _phone(app_client, token)
-    await _request_deletion(app_client, token)
 
     at_hold = race.pause()
     original = identity_service.hold_account_active
@@ -529,8 +550,11 @@ async def test_l_a_waiting_report_holds_no_device_row_the_account_delete_needs(
         return await original(session, account)
 
     monkeypatch.setattr(identity_service, "hold_account_active", paused)
-    report = race.spawn(_report(app_client, phone, "lock-order-report"))
-    await at_hold.wait_reached()  # idempotency resolved, account not yet held
+    report = race.spawn(_report(app_client, phone, "lock-order-report", token=token))
+    await at_hold.wait_reached()  # authenticated, idempotency resolved, account not yet held
+    async with _factory()() as requesting:
+        await deletion_service.request_deletion(requesting, account_id)
+        await requesting.commit()
 
     # A ceiling on a broken build: a correct order finishes at once.
     summary = await asyncio.wait_for(account_deletion.run_cycle(), timeout=30)
@@ -558,6 +582,28 @@ async def test_l_an_anonymous_report_takes_no_account_lock(app_client, db_clean,
     phone = await _phone(app_client)
     assert (await _report(app_client, phone, "anonymous-no-lock")).status_code == 201
     assert calls == []
+
+
+async def test_l_a_claimed_phones_signed_out_report_takes_no_account_lock(
+    app_client, db_clean, storage, registered_supabase_user, monkeypatch,
+):
+    """Audit lane 1, F03: a claim is not authority, so nothing of the claimant's is held either."""
+    from app.domains.identity import service as identity_service
+
+    calls: list = []
+    original = identity_service.hold_account_active
+
+    async def recording(session, account_id):
+        calls.append(account_id)
+        return await original(session, account_id)
+
+    token, _account_id = await registered_supabase_user()
+    phone = await _phone(app_client, token)
+    monkeypatch.setattr(identity_service, "hold_account_active", recording)
+    response = await _report(app_client, phone, "claimed-but-signed-out")
+    assert response.status_code == 201, response.text
+    assert calls == []
+    assert (await _row(response.json()["report_id"])).account_id is None
 
 
 def test_l_the_order_is_idempotency_then_lifecycle_then_bytes():
@@ -746,7 +792,7 @@ async def test_e_k_the_final_proof_covers_the_prefix_and_legacy_evidence_togethe
 ):
     token, account_id = await registered_supabase_user()
     phone = await _phone(app_client, token)
-    current = await _report(app_client, phone, "current-report")
+    current = await _report(app_client, phone, "current-report", token=token)
     assert current.status_code == 201
     current_key = (await _row(current.json()["report_id"])).photo_key
     legacy_key = await _legacy_report(

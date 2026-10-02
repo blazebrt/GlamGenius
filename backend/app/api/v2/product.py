@@ -32,6 +32,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.domains.ai_gateway.models import AI_STATUS_SUCCEEDED, VERIFICATION_USER_CONFIRMED, AIRun, AIRunOutput
 from app.domains.alternatives import service as alternatives_service
 from app.domains.community import service as community_service
+from app.domains.identity import service as identity_service
 from app.domains.media.storage.base import StorageError, StorageMisconfigured
 from app.domains.nutrition.grading import from_scan
 from app.domains.nutrition.grading.production_rules import resolve_production_ruleset
@@ -226,9 +227,28 @@ async def lookup_barcode(
 async def record_scan_event(
     body: ScanBody,
     device: ScanDevice = Depends(current_device),
+    current: CurrentAccount | None = Depends(get_optional_account),
     session: AsyncSession = Depends(get_session),
 ):
-    """Record a scan. Safe to replay: an offline queue can send the same one twice."""
+    """Record a scan. Safe to replay: an offline queue can send the same one twice.
+
+    Two credentials, two meanings. ``X-Device-Token`` says which installation
+    scanned. Only a bearer token says *who* did, and only a scan sent with one
+    belongs to that account. A device's ``claimed_by_account_id`` records who
+    once claimed the phone and is never read here. A scan sent with the device
+    token alone is anonymous, whoever claimed the phone and whoever is holding
+    it now. Otherwise logging out would not end the attribution: the next
+    person to pick the phone up, or the next account to sign in on it, would
+    be scanning into the claimant's history and privacy export.
+
+    A presented bearer that does not verify is refused, never downgraded
+    (``get_optional_account``). An account-owned scan holds its account active
+    until commit, before the device row is locked: the order the deletion
+    worker relies on.
+    """
+    account_id = current.account_id if current is not None else None
+    if account_id is not None and not await identity_service.hold_account_active(session, account_id):
+        raise AccountInactiveError()
     result = await service.lookup(session, body.barcode)
     event, created = await service.record_scan(
         session,
@@ -236,7 +256,7 @@ async def record_scan_event(
         outcome=result["outcome"],
         client_scan_id=body.client_scan_id,
         device_id=device.id,
-        account_id=device.claimed_by_account_id,
+        account_id=account_id,
         queued_offline=body.queued_offline,
         scanned_at=body.scanned_at,
     )
@@ -676,6 +696,7 @@ async def report_label_error(
     barcode: str | None = Form(default=None),
     photo: UploadFile | None = File(default=None),
     device: ScanDevice = Depends(current_device),
+    current: CurrentAccount | None = Depends(get_optional_account),
     session: AsyncSession = Depends(get_session),
 ):
     """Record one error report, with the photo attached inline.
@@ -687,6 +708,11 @@ async def report_label_error(
     Reachable with a device token and no account. The person best placed to
     notice a wrong number is somebody standing in a shop who has never signed
     up, and an email address would simply mean never hearing from them.
+
+    Whose report it is follows the scan rule exactly: the account a bearer
+    token authenticates, or nobody. The device's claim is never read, so a
+    report made signed out after the claimant logged out, or by another
+    account on the same phone, never enters the claimant's privacy export.
 
     The photo is read here, before any lock, so a slow upload holds nothing.
     Where it is stored, and whether it is stored at all, is decided by
@@ -710,12 +736,12 @@ async def report_label_error(
     try:
         report, created, written_key = await service.file_label_error_report(
             session,
-            device_id=device.id, account_id=device.claimed_by_account_id,
+            device_id=device.id, account_id=current.account_id if current is not None else None,
             client_report_id=client_report_id, subject=subject, reason=reason,
             barcode=barcode, photo=data or None, photo_content_type=content_type,
         )
     except service.ReportAccountNotActive:
-        # The device's account asked to be deleted first. Nothing was stored.
+        # The reporting account asked to be deleted first. Nothing was stored.
         raise AccountInactiveError() from None
     except StorageMisconfigured as exc:
         raise StorageMisconfiguredError() from exc
@@ -728,7 +754,7 @@ async def report_label_error(
     report_device_id = device.id
     report_photo_key = report.photo_key
     try:
-        # Ends the idempotency lock and, for a claimed device, the account
+        # Ends the idempotency lock and, for a signed-in report, the account
         # hold. A deletion request that arrived meanwhile has been waiting.
         await session.commit()
     except Exception:

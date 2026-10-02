@@ -21,6 +21,7 @@ import axios from 'axios';
 
 import { getInstallationId } from './deviceIdentity';
 import { api } from './api';
+import { authAccountId } from '../store/authGeneration';
 import { claimScanDevice, type ProductVerdictWire, type PurchaseOsCheck } from './apiV2';
 
 const BACKEND_URL = process.env.EXPO_PUBLIC_BACKEND_URL || '';
@@ -106,7 +107,19 @@ export interface QueuedScan {
   barcode: string;
   scanned_at: string;
   queued_offline: boolean;
+  /**
+   * The account signed in when the scan was made, or null when nobody was.
+   * Absent on entries queued before this field existed, which reads as null.
+   *
+   * Not a credential: an account id. It decides how the entry may be sent
+   * (``sendQueuedScan``): a signed-out scan only with the device token, and
+   * an account's scan only with that same account's own session, or not yet.
+   */
+  owner?: string | null;
 }
+
+/** The identity a scan is being made under, right now. */
+const currentOwner = (): string | null => authAccountId() || null;
 
 // A device request must not trigger the shared client's 401 sign-out.
 // eslint-disable-next-line import/no-named-as-default-member
@@ -123,13 +136,25 @@ const scanApi = axios.create({
  * X-Device-Token and nothing else, and sending them through the account client
  * both fails for want of the header and trips its 401 sign-out on the way.
  */
-export async function postDeviceForm(path: string, form: FormData): Promise<void> {
+export async function postDeviceForm(
+  path: string,
+  form: FormData,
+  options: { asAccount?: string | null } = {},
+): Promise<void> {
   const headers = await deviceHeaders();
   if (!headers['X-Device-Token']) throw new Error('no device token');
-  await scanApi.post(path, form, {
-    headers: { ...headers, 'Content-Type': 'multipart/form-data' },
-    timeout: UPLOAD_TIMEOUT_MS,
-  });
+  const config = { headers: { ...headers, 'Content-Type': 'multipart/form-data' }, timeout: UPLOAD_TIMEOUT_MS };
+  if (options.asAccount) {
+    // Signed in when it was made, so it is that account's. Sent through the
+    // account client with ``expectedAccountId``: as that account, or not at
+    // all (AccountMismatchError, nothing sent). A stale device token answers
+    // ``DEVICE_UNKNOWN``, which that client never treats as a sign-out.
+    await api.post(path, form, { ...config, expectedAccountId: options.asAccount });
+    return;
+  }
+  // Made signed out: the device token alone, so it stays nobody's whoever is
+  // signed in by the time it is sent.
+  await scanApi.post(path, form, config);
 }
 
 const UNKNOWN_CONFIDENCE: Confidence = {
@@ -509,7 +534,9 @@ function withQueueLane<T>(work: () => Promise<T>): Promise<T> {
 function isQueuedScan(entry: unknown): entry is QueuedScan {
   if (typeof entry !== 'object' || entry === null) return false;
   const candidate = entry as Partial<QueuedScan>;
-  return typeof candidate.client_scan_id === 'string' && typeof candidate.barcode === 'string';
+  const owner = candidate.owner;
+  return typeof candidate.client_scan_id === 'string' && typeof candidate.barcode === 'string'
+    && (owner === undefined || owner === null || (typeof owner === 'string' && owner !== ''));
 }
 
 /**
@@ -623,6 +650,40 @@ export function syncQueue(): Promise<SyncResult> {
 }
 
 /**
+ * Send one queued scan as the identity it was made under: the request, or
+ * null, having sent nothing, when that identity is not the one signed in now.
+ *
+ * The server attributes a scan to the account whose bearer token it carries,
+ * and to nobody when it carries none (audit lane 1, F03). So the queue must
+ * not let a scan change hands between being made and being sent:
+ *
+ * - **Made signed out:** sent with the device token alone, whoever is signed
+ *   in by the time it goes. It never becomes anybody's scan by waiting.
+ * - **Made as A:** sent only while A is signed in, through the account client
+ *   with ``expectedAccountId: A``, which refuses to send it as anyone else.
+ *   While A is signed out, or B is signed in, it waits, unsent and intact,
+ *   for A. It is never sent anonymously and never as B.
+ *
+ * No token is stored in the queue: an entry names its account, and the
+ * current session supplies the credential at the moment it is sent.
+ */
+function sendQueuedScan(entry: QueuedScan, headers: Record<string, string>): Promise<unknown> | null {
+  // Not ``async``, and the request's own promise: it is issued in the caller's
+  // turn and settles when the request does, exactly as the inline call it
+  // replaced, so a flush reaches the network and finishes no later than it did.
+  const body = {
+    barcode: entry.barcode,
+    client_scan_id: entry.client_scan_id,
+    scanned_at: entry.scanned_at,
+    queued_offline: entry.queued_offline,
+  };
+  const owner = entry.owner ?? null;
+  if (owner === null) return scanApi.post('/api/v2/scan/events', body, { headers });
+  if (owner !== currentOwner()) return null;
+  return api.post('/api/v2/scan/events', body, { headers, expectedAccountId: owner, timeout: LOOKUP_TIMEOUT_MS });
+}
+
+/**
  * One flush: snapshot, send, then remove exactly what was acknowledged from
  * the latest queue.
  */
@@ -636,12 +697,9 @@ async function flushQueueOnce(): Promise<SyncResult> {
   const acknowledged = new Set<string>();
   for (const entry of snapshot) {
     try {
-      await scanApi.post('/api/v2/scan/events', {
-        barcode: entry.barcode,
-        client_scan_id: entry.client_scan_id,
-        scanned_at: entry.scanned_at,
-        queued_offline: entry.queued_offline,
-      }, { headers });
+      const sending = sendQueuedScan(entry, headers);
+      if (sending === null) continue; // waits for the account it was made under
+      await sending;
       acknowledged.add(entry.client_scan_id);
     } catch {
       // Stays queued. It was never acknowledged, so it is never removed.
@@ -678,6 +736,9 @@ function offlineAnswer(barcode: string, cached: ScanResult | null): ScanResult {
  * phone with no signal still answers.
  */
 export async function scanBarcode(barcode: string): Promise<ScanResult> {
+  // Whose scan this is, taken before anything awaits: signing out or switching
+  // account while it is in flight must not change who made it.
+  const owner = currentOwner();
   const clean = (barcode || '').trim();
   const cached = await readCached(clean);
   const scanId = newScanId();
@@ -685,7 +746,7 @@ export async function scanBarcode(barcode: string): Promise<ScanResult> {
 
   let headers = await deviceHeaders();
   if (!headers['X-Device-Token']) {
-    await enqueueScan({ client_scan_id: scanId, barcode: clean, scanned_at: scannedAt, queued_offline: true });
+    await enqueueScan({ client_scan_id: scanId, barcode: clean, scanned_at: scannedAt, queued_offline: true, owner });
     return offlineAnswer(clean, cached);
   }
 
@@ -700,7 +761,7 @@ export async function scanBarcode(barcode: string): Promise<ScanResult> {
     // this write landed before it confirms a pack — see settleScanEvents.
     trackPendingScanEvent(
       clean,
-      enqueueScan({ client_scan_id: scanId, barcode: clean, scanned_at: scannedAt, queued_offline: false })
+      enqueueScan({ client_scan_id: scanId, barcode: clean, scanned_at: scannedAt, queued_offline: false, owner })
         .then(() => syncQueue())
         .then(() => undefined)
         .catch(() => undefined),
@@ -723,7 +784,7 @@ export async function scanBarcode(barcode: string): Promise<ScanResult> {
         }
       }
     }
-    await enqueueScan({ client_scan_id: scanId, barcode: clean, scanned_at: scannedAt, queued_offline: true });
+    await enqueueScan({ client_scan_id: scanId, barcode: clean, scanned_at: scannedAt, queued_offline: true, owner });
     return offlineAnswer(clean, cached);
   }
 }

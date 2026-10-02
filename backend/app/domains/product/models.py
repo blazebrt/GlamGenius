@@ -41,6 +41,12 @@ class ScanDevice(UUIDPrimaryKey, TimestampMixin, Base):
     rate-limitable without anybody signing up, and without opening a public
     endpoint. ``claimed_by_account_id`` is how a device's scans follow someone
     who later creates an account.
+
+    That claim is history, not authority. It records who once attached this
+    phone, so the anonymous scans made before then could follow them in. It
+    does not make anything sent later with this device's token theirs: new
+    account-owned rows come only from a request carrying that account's bearer
+    token. See ``devices.claim`` and ``service.record_scan``.
     """
 
     __tablename__ = "scan_devices"

@@ -23,7 +23,6 @@ from app.shared.database.base import utcnow
 from app.shared.errors.codes import ErrorCode
 from app.shared.errors.exceptions import AppError
 
-
 TOKEN_BYTES = 32
 
 

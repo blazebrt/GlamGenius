@@ -95,19 +95,28 @@ async def test_f_e1_e2_e3_a_second_owner_of_the_phone_gets_none_of_the_erased_hi
     await _plain_scan(app_client, phone)
     assert [row.account_attachment_allowed for row in await _events(device)] == [True]
     assert await _claim(app_client, phone, token_a) == 1
-    # Owned history: an ordinary scan and a confirmed label capture.
-    await _plain_scan(app_client, phone)
+    # Owned history: an ordinary scan and a confirmed label capture, both made
+    # signed in as A. Only A's own bearer token makes a scan A's.
+    await _plain_scan(app_client, phone, token=token_a)
     a1, _s1 = await _capture(phone, account_a, _facts())
     history = await _events(device)
     assert len(history) == 3
     assert all(row.account_id == account_a and row.account_attachment_allowed is False for row in history)
+
+    # Audit lane 1, F03: the same phone used signed out after the claim. Its
+    # scan belongs to nobody, and never may: it was not made before the claim.
+    await _plain_scan(app_client, phone)
+    signed_out = [row for row in await _events(device) if row.id not in {r.id for r in history}]
+    assert [(row.account_id, row.account_attachment_allowed) for row in signed_out] == [(None, False)]
+    assert await _claim(app_client, phone, token_a) == 0, "A's own re-claim does not collect it either"
+    history = [*history, *signed_out]
 
     await _erase(app_client, token_a)
 
     # E1: every row A left is accountless, withdrawn where it carried facts,
     # and permanently non-attachable. The rows themselves stay (provenance).
     erased = await _events(device)
-    assert [row.id for row in erased] == [row.id for row in history]
+    assert sorted(row.id for row in erased) == sorted(row.id for row in history)
     assert all(row.account_id is None and row.account_attachment_allowed is False for row in erased)
     assert next(row for row in erased if row.id == a1.id).label_facts is None
     assert all(row.device_id == device for row in erased), "Lane C needs the device kept"
@@ -162,7 +171,7 @@ async def test_f_e_an_owned_row_cannot_be_marked_attachable(app_client, db_clean
     """The constraint that makes any account's departure privacy-safe on its own."""
     token, account_id = await registered_supabase_user()
     phone = await _device(app_client, token)
-    await _plain_scan(app_client, phone)
+    await _plain_scan(app_client, phone, token=token)
     device = (await _device_row(phone)).id
     with pytest.raises(IntegrityError):
         async with _factory()() as session:
