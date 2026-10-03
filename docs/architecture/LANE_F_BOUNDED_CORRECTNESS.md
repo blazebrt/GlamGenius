@@ -23,12 +23,19 @@ sign in on the same phone was given the deleted person's history.
 
 | State | `account_id` | `account_attachment_allowed` |
 | --- | --- | --- |
-| New signed-out scan | `NULL` | `true` — it may follow its phone into an account |
-| Scan recorded for an account | the account | `false` from the start |
+| New signed-out scan on a phone nobody has claimed | `NULL` | `true` — it may follow its phone into an account |
+| New signed-out scan on a claimed phone (audit lane 1, F03) | `NULL` | `false` — made after the claim, so nobody's, ever |
+| Scan recorded for an account (sent with that account's bearer token) | the account | `false` from the start |
 | Attached by a device claim | the claimant | set `false` in the same statement |
 | Left by account erasure | `NULL` | `false`, set by erasure before the account goes |
 
 - `attach_scans_to_account` moves only rows that are accountless **and** attachable.
+- A scan is an account's only when the request carries that account's bearer
+  token. The device's `claimed_by_account_id` is history (who once attached the
+  phone), never authority for a new row. Whether an anonymous scan is
+  attachable is read under the device row lock that a claim also takes
+  (`service._attachable_anonymous_scan`), so a scan and a concurrent claim are
+  serialised.
 - A check constraint, `ck_scan_events_owned_not_attachable`, makes an owned row
   non-attachable by construction. So a row an account leaves behind — through
   the erasure path or the `ON DELETE SET NULL` cascade alone — can never be

@@ -12,6 +12,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 
 import { V2 } from './apiV2';
 import { postDeviceForm } from './productScan';
+import { authAccountId } from '../store/authGeneration';
 
 const QUEUE_KEY = 'glamgenius_error_reports_v1';
 
@@ -32,18 +33,31 @@ export interface ErrorReport {
   /** A local photo URI, uploaded with the report when there is a connection. */
   photo_uri?: string | null;
   reported_at: string;
+  /**
+   * The account signed in when the report was made, or null when nobody was;
+   * absent on older queued reports, which reads as null. Not a credential.
+   * It is sent as that account or not yet, never as anyone else (see
+   * ``productScan.sendQueuedScan`` for the same rule on scans).
+   */
+  owner?: string | null;
 }
 
 const newId = (): string =>
   `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
 
 export const makeReport = (
-  fields: Omit<ErrorReport, 'client_report_id' | 'reported_at'>
+  fields: Omit<ErrorReport, 'client_report_id' | 'reported_at' | 'owner'>
 ): ErrorReport => ({
   ...fields,
   client_report_id: newId(),
   reported_at: new Date().toISOString(),
+  // Whoever is signed in as the person taps report, taken now.
+  owner: authAccountId() || null,
 });
+
+/** Whether ``report`` may be sent now: signed out, or as its own account. */
+const sendableNow = (report: ErrorReport): boolean =>
+  !report.owner || report.owner === authAccountId();
 
 async function readQueue(): Promise<ErrorReport[]> {
   try {
@@ -74,16 +88,18 @@ async function post(report: ErrorReport): Promise<void> {
       uri: report.photo_uri, name: 'pack.jpg', type: 'image/jpeg',
     } as unknown as Blob);
   }
-  // As this device, not as an account. The endpoint authenticates with the
-  // device token — the person who notices a wrong number is often not signed
-  // in — and the account client would both omit that header and sign a
-  // signed-in user out on the 401 it got back.
-  await postDeviceForm(`${V2}/reports/label-error`, form);
+  // Always as this device: the endpoint needs the device token, because the
+  // person who notices a wrong number is often not signed in. A report made
+  // signed in also carries that same account's session, which is what makes it
+  // theirs on the server; one made signed out carries none and stays nobody's,
+  // whoever is signed in when it is finally sent.
+  await postDeviceForm(`${V2}/reports/label-error`, form, { asAccount: report.owner ?? null });
 }
 
 /** Send now if we can, keep it if we cannot. Returns true when it went. */
 export async function submitReport(report: ErrorReport): Promise<boolean> {
   try {
+    if (!sendableNow(report)) throw new Error('made by an account that is not signed in');
     await post(report);
     return true;
   } catch {
@@ -103,6 +119,11 @@ export async function flushReports(): Promise<{ sent: number; remaining: number 
   const left: ErrorReport[] = [];
   let sent = 0;
   for (const report of queue) {
+    // A report made as another account waits for that account, intact.
+    if (!sendableNow(report)) {
+      left.push(report);
+      continue;
+    }
     try {
       await post(report);
       sent += 1;

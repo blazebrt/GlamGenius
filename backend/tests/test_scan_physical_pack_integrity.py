@@ -130,9 +130,16 @@ async def _capture(
         return event, snapshot
 
 
-async def _plain_scan(app_client: AsyncClient, headers: dict[str, str], barcode: str = BARCODE) -> None:
+async def _plain_scan(
+    app_client: AsyncClient, headers: dict[str, str], barcode: str = BARCODE, *, token: str | None = None,
+) -> None:
+    """A plain scan event. Sent signed in as ``token``'s account when given.
+
+    Only a bearer token makes a scan anybody's (audit lane 1, F03): the device
+    token alone records an anonymous scan, whoever claimed the phone.
+    """
     response = await app_client.post(
-        "/api/v2/scan/events", headers=headers,
+        "/api/v2/scan/events", headers={**headers, **(auth(token) if token else {})},
         json={"barcode": barcode, "client_scan_id": uuid.uuid4().hex},
     )
     assert response.status_code == 201, response.text

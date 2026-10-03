@@ -40,7 +40,7 @@ from app.domains.off.store import get_off_sessionmaker
 from app.domains.product.confidence import CONFIDENCE_TEXT, ProductConfidence
 from app.domains.product.formula_projection import LINE_BOUNDARIES, boundary_significance
 from app.domains.product.fssai import find_licence, is_valid_licence
-from app.domains.product.models import LabelErrorReport, LabelSnapshot, ProductRecord, ScanEvent
+from app.domains.product.models import LabelErrorReport, LabelSnapshot, ProductRecord, ScanDevice, ScanEvent
 from app.shared.database.base import new_uuid, utcnow
 from app.shared.database.sql import get_sessionmaker
 
@@ -506,6 +506,47 @@ async def _existing_scan_event(
     )).scalar_one_or_none()
 
 
+async def _attachable_anonymous_scan(session: AsyncSession, device_id: uuid.UUID | None) -> bool:
+    """May an anonymous scan on this device later follow its phone into an account?
+
+    Only when nobody has claimed the phone. A claim attaches the anonymous
+    scans made *before* anyone signed up (``attach_scans_to_account``); after a
+    claim, an anonymous scan is somebody using the phone signed out. That is
+    the claimant after logging out, or anyone else they handed the phone to,
+    and it is nobody's history. If it were attachable, the claimant's next
+    sign-in on this phone would collect it, and with it a stranger's scans.
+
+    The claim is read fresh, with ``FOR UPDATE`` on the device row. That
+    conflicts with the row lock a claim's conditional UPDATE takes, so this
+    scan and a concurrent claim are serialised. A claim that committed first is
+    seen, and the scan is not attachable. A claim that comes second waits, and
+    then attaches this scan as one made before it. The ORM object resolved from
+    the token is not consulted: it was read before the lock, and may predate
+    the claim.
+
+    ``FOR UPDATE`` rather than ``FOR NO KEY UPDATE``: the ``key_share`` modes
+    are reserved to the identity service's account locks
+    (``test_step11c_account_lock_order``). The stronger mode adds a conflict
+    only with the ``FOR KEY SHARE`` of a foreign-key check, from another
+    request inserting a row that references this device. Such a request
+    resolved the device, so its flush writes this row's ``last_seen_at``
+    before any row that references it. It therefore already waits on this
+    lock either way.
+
+    No account row is involved: the scan has no ``account_id``, so taking the
+    device lock first cannot close a cycle with the deletion worker, which
+    holds an account and then reaches its devices.
+    """
+    if device_id is None:
+        return False
+    claimed_by = await session.scalar(
+        select(ScanDevice.claimed_by_account_id)
+        .where(ScanDevice.id == device_id)
+        .with_for_update()
+    )
+    return claimed_by is None
+
+
 async def record_scan(
     session: AsyncSession,
     *,
@@ -550,6 +591,14 @@ async def record_scan(
     carrying *different* evidence — another barcode, another AI run, other label
     facts — is a policy question, and it stays with the callers that own the
     facts in question.
+
+    **Ownership is the caller's ``account_id``, and nothing else.** It must be
+    the account the request authenticated as, or ``None``. A device's
+    ``claimed_by_account_id`` is never a substitute: possessing a phone's
+    device token is not being signed in as the person who once claimed it.
+
+    **Attachability is decided here, under the device row lock.** See
+    :func:`_attachable_anonymous_scan`.
     """
     existing = await _existing_scan_event(
         session, device_id=device_id, client_scan_id=client_scan_id,
@@ -557,13 +606,12 @@ async def record_scan(
     if existing is not None:
         return existing, False
 
+    attachable = account_id is None and await _attachable_anonymous_scan(session, device_id)
     event = ScanEvent(
         device_id=device_id, account_id=account_id, barcode=barcode, outcome=outcome,
         client_scan_id=client_scan_id, queued_offline=queued_offline,
         scanned_at=scanned_at or utcnow(), label_facts=label_facts, ai_run_id=ai_run_id,
-        # Only a scan made signed out may later follow its phone into an
-        # account. One recorded for an account never becomes attachable again.
-        account_attachment_allowed=account_id is None,
+        account_attachment_allowed=attachable,
     )
     try:
         async with session.begin_nested():
@@ -862,15 +910,17 @@ async def file_label_error_report(
     1. **Idempotency first.** :func:`lock_label_report_identity`, then the
        lookup. A replay returns the original report before any byte is
        touched, so filed evidence is never overwritten.
-    2. **Account lifecycle.** A device claimed by an account files evidence
-       that account owns, so it takes the same boundary as a media upload:
+    2. **Account lifecycle.** A report filed by a signed-in account
+       (``account_id`` is the account the request authenticated as, never
+       the device's claim) files evidence that account owns, so it takes the
+       same boundary as a media upload:
        :func:`identity_service.hold_account_active`, FOR SHARE on the account
        row until this transaction ends. If deletion was requested first, the
        account is not active and nothing is written, not a byte and not a
        row. If the report got there first, the deletion request waits for it
        to commit, and the deletion worker's purges then remove what it wrote.
-       An unclaimed device's report belongs to no account and takes no
-       account lock.
+       An anonymous report belongs to no account and takes no account lock,
+       whoever has claimed the device it came from.
     3. **Bytes, then the row.** A storage failure leaves no row pointing at
        nothing. A row that fails to flush deletes them again
        (:func:`discard_unfiled_report_photo`): nothing was committed, so an

@@ -21,11 +21,17 @@ import axios from 'axios';
 
 import { getInstallationId } from './deviceIdentity';
 import { api } from './api';
+import { authAccountId } from '../store/authGeneration';
 import { claimScanDevice, type ProductVerdictWire, type PurchaseOsCheck } from './apiV2';
 
 const BACKEND_URL = process.env.EXPO_PUBLIC_BACKEND_URL || '';
 
 const DEVICE_KEY = 'glamgenius_scan_device_v1';
+/**
+ * Where a device credential waits when the keychain would not keep it. See
+ * ``DeviceRecoveryCopy``. Never the normal home of the token.
+ */
+const DEVICE_RECOVERY_KEY = 'glamgenius_scan_device_recovery_v1';
 const CACHE_KEY = 'glamgenius_scan_cache_v1';
 const QUEUE_KEY = 'glamgenius_scan_queue_v1';
 
@@ -101,7 +107,19 @@ export interface QueuedScan {
   barcode: string;
   scanned_at: string;
   queued_offline: boolean;
+  /**
+   * The account signed in when the scan was made, or null when nobody was.
+   * Absent on entries queued before this field existed, which reads as null.
+   *
+   * Not a credential: an account id. It decides how the entry may be sent
+   * (``sendQueuedScan``): a signed-out scan only with the device token, and
+   * an account's scan only with that same account's own session, or not yet.
+   */
+  owner?: string | null;
 }
+
+/** The identity a scan is being made under, right now. */
+const currentOwner = (): string | null => authAccountId() || null;
 
 // A device request must not trigger the shared client's 401 sign-out.
 // eslint-disable-next-line import/no-named-as-default-member
@@ -118,13 +136,25 @@ const scanApi = axios.create({
  * X-Device-Token and nothing else, and sending them through the account client
  * both fails for want of the header and trips its 401 sign-out on the way.
  */
-export async function postDeviceForm(path: string, form: FormData): Promise<void> {
+export async function postDeviceForm(
+  path: string,
+  form: FormData,
+  options: { asAccount?: string | null } = {},
+): Promise<void> {
   const headers = await deviceHeaders();
   if (!headers['X-Device-Token']) throw new Error('no device token');
-  await scanApi.post(path, form, {
-    headers: { ...headers, 'Content-Type': 'multipart/form-data' },
-    timeout: UPLOAD_TIMEOUT_MS,
-  });
+  const config = { headers: { ...headers, 'Content-Type': 'multipart/form-data' }, timeout: UPLOAD_TIMEOUT_MS };
+  if (options.asAccount) {
+    // Signed in when it was made, so it is that account's. Sent through the
+    // account client with ``expectedAccountId``: as that account, or not at
+    // all (AccountMismatchError, nothing sent). A stale device token answers
+    // ``DEVICE_UNKNOWN``, which that client never treats as a sign-out.
+    await api.post(path, form, { ...config, expectedAccountId: options.asAccount });
+    return;
+  }
+  // Made signed out: the device token alone, so it stays nobody's whoever is
+  // signed in by the time it is sent.
+  await scanApi.post(path, form, config);
 }
 
 const UNKNOWN_CONFIDENCE: Confidence = {
@@ -180,8 +210,87 @@ interface StoredDevice {
 let devicePromise: Promise<StoredDevice | null> | null = null;
 
 /**
- * Read the stored device, moving it into the keychain if it is still in the
- * old place.
+ * A device credential the server has issued but the keychain refused to keep.
+ *
+ * The server never re-registers a known ``device_key`` without its current
+ * token, and only the server ever held that token's hash. So if the token from
+ * a successful registration is lost before it is stored, the installation can
+ * never prove possession again: every later registration is refused, and the
+ * scanner is offline for good.
+ *
+ * Weakening the server's proof requirement would let anyone who learns a
+ * device key take its scans over, so the recovery is local instead. When, and
+ * only when, a verified keychain write of a freshly issued credential fails,
+ * the credential is kept here, in the app sandbox, with its state recorded.
+ * It is migration-only and bounded:
+ *
+ * - it is read before the keychain, because it is always newer than whatever
+ *   the keychain could still hold;
+ * - every read tries to move it into the keychain with a verified write, and
+ *   it is deleted only once that write is proven;
+ * - any later verified keychain write of the device deletes it;
+ * - forgetting the device deletes it.
+ *
+ * The trade-off: until the keychain accepts it, the token is protected by the
+ * sandbox alone, as every token was before the keychain migration. The other
+ * outcome is a phone that can never scan again.
+ */
+interface DeviceRecoveryCopy {
+  state: 'secure_write_failed';
+  written_at: string;
+  device: StoredDevice;
+}
+
+/**
+ * The credential this process holds when neither the keychain nor the
+ * recovery copy would keep it. Memory only: it ends with the process.
+ */
+let unpersistedDevice: StoredDevice | null = null;
+
+/**
+ * Whether a plain copy (recovery or pre-keychain) may still exist.
+ *
+ * True when the process starts, because one may have been left by an earlier
+ * run, and set again whenever this process writes a recovery copy. A read that
+ * finds neither, or removes both, clears it, so an ordinary scan reads the
+ * keychain alone, as it did before plain copies were looked for.
+ */
+let plainCopiesMayExist = true;
+
+function isStoredDevice(value: unknown): value is StoredDevice {
+  if (typeof value !== 'object' || value === null) return false;
+  const candidate = value as Partial<StoredDevice>;
+  return typeof candidate.device_key === 'string' && typeof candidate.token === 'string' && candidate.token !== '';
+}
+
+async function readRecoveryCopy(): Promise<StoredDevice | null> {
+  const copy = await readJson<DeviceRecoveryCopy | null>(DEVICE_RECOVERY_KEY, null);
+  if (!copy || copy.state !== 'secure_write_failed' || !isStoredDevice(copy.device)) return null;
+  return copy.device;
+}
+
+async function removePlainCopy(key: string): Promise<boolean> {
+  try {
+    await AsyncStorage.removeItem(key);
+    return true;
+  } catch {
+    // A copy left behind is retried on the next read. Losing the credential
+    // would not be.
+    return false;
+  }
+}
+
+/**
+ * Persist the device in the keychain and prove it: true only when reading it
+ * back returns exactly what was written. Never throws, and never deletes any
+ * other copy.
+ */
+async function persistDeviceVerified(device: StoredDevice): Promise<boolean> {
+  return secureSessionStorage.setItemVerified(DEVICE_KEY, JSON.stringify(device));
+}
+
+/**
+ * Read the stored device, moving it into the keychain if it is somewhere else.
  *
  * ``token`` here is a credential: it is what ``X-Device-Token`` presents, and
  * it is what ties this phone's scans to this phone. It used to sit in
@@ -191,53 +300,114 @@ let devicePromise: Promise<StoredDevice | null> | null = null;
  * The migration is the important half. The server refuses to re-register a
  * known ``device_key`` without its current token, so an install that simply
  * lost this blob could not recover its identity: it would mint a new key and
- * orphan every scan it had already made. So the old location is read once, its
- * contents moved, and only then cleared.
+ * orphan every scan it had already made.
+ *
+ * So a plain copy is deleted only after a verified keychain write: written,
+ * read back and compared. A write that throws, a write that reads back as
+ * anything else and a write that cannot be read back at all all leave the plain
+ * copy in place; this call still uses it, and the next read tries again.
+ *
+ * Where the credential is looked for, newest first: the recovery copy (only
+ * ever written after the keychain refused a fresh credential), the keychain,
+ * then the pre-keychain location. With ``migrateLegacy`` false nothing is
+ * written or deleted at all.
  */
 async function readStoredDevice(migrateLegacy = true): Promise<StoredDevice | null> {
+  if (plainCopiesMayExist) {
+    const recovered = await readRecoveryCopy();
+    if (recovered) {
+      if (migrateLegacy && (await persistDeviceVerified(recovered))) {
+        unpersistedDevice = null;
+        const removed = (await removePlainCopy(DEVICE_RECOVERY_KEY)) && (await removePlainCopy(DEVICE_KEY));
+        if (removed) plainCopiesMayExist = false;
+      }
+      return recovered;
+    }
+  }
+
   const secure = await secureSessionStorage.getItem(DEVICE_KEY);
   if (secure) {
+    let device: StoredDevice;
     try {
-      return JSON.parse(secure) as StoredDevice;
+      device = JSON.parse(secure) as StoredDevice;
     } catch {
       return null;
     }
-  }
-  const legacy = await readJson<StoredDevice | null>(DEVICE_KEY, null);
-  if (legacy?.token && migrateLegacy) {
-    await writeStoredDevice(legacy);
-    try {
-      await AsyncStorage.removeItem(DEVICE_KEY);
-    } catch {
-      // Keeping a copy in the old place is worse than leaving it, but losing
-      // the identity is worse still. The keychain copy is written first.
+    // The keychain holds a readable device, so a pre-keychain copy left behind
+    // by an earlier removal that failed is stale. It is a credential in an
+    // unencrypted file; it goes.
+    if (migrateLegacy && plainCopiesMayExist) {
+      const stale = (await readJson<unknown>(DEVICE_KEY, null)) !== null;
+      if (!stale || (await removePlainCopy(DEVICE_KEY))) plainCopiesMayExist = false;
     }
+    return device;
   }
-  return legacy;
+
+  const legacy = await readJson<StoredDevice | null>(DEVICE_KEY, null);
+  if (isStoredDevice(legacy)) {
+    if (migrateLegacy && (await persistDeviceVerified(legacy))) {
+      unpersistedDevice = null;
+      if (await removePlainCopy(DEVICE_KEY)) plainCopiesMayExist = false;
+    }
+    return legacy;
+  }
+  if (migrateLegacy && legacy === null) plainCopiesMayExist = false;
+  return unpersistedDevice;
 }
 
+/**
+ * Best-effort write, for changes that can be repeated if they are lost (the
+ * ``claimed_for`` marker). A verified write supersedes any plain copy.
+ */
 async function writeStoredDevice(device: StoredDevice): Promise<void> {
-  try {
-    await secureSessionStorage.setItem(DEVICE_KEY, JSON.stringify(device));
-  } catch {
-    // An unavailable keychain must not break a scan.
+  if (await persistDeviceVerified(device)) {
+    unpersistedDevice = null;
+    if (plainCopiesMayExist) {
+      const removed = (await removePlainCopy(DEVICE_RECOVERY_KEY)) && (await removePlainCopy(DEVICE_KEY));
+      if (removed) plainCopiesMayExist = false;
+    }
   }
+}
+
+/**
+ * Keep a credential the keychain refused, in the recovery copy, or failing
+ * that in memory. True when the recovery copy was written.
+ */
+async function keepUnpersistedDevice(device: StoredDevice): Promise<boolean> {
+  const copy: DeviceRecoveryCopy = {
+    state: 'secure_write_failed',
+    written_at: new Date().toISOString(),
+    device,
+  };
+  plainCopiesMayExist = true;
+  try {
+    await AsyncStorage.setItem(DEVICE_RECOVERY_KEY, JSON.stringify(copy));
+    if (isStoredDevice(await readRecoveryCopy())) return true;
+  } catch {
+    // Falls through to memory.
+  }
+  unpersistedDevice = device;
+  return false;
 }
 
 async function registerDevice(): Promise<StoredDevice | null> {
   const deviceKey = (await getInstallationId()).replace(/-/g, '');
+  let token: string;
   try {
     const response = await scanApi.post('/api/v2/scan/device', {
       device_key: deviceKey,
       platform: 'mobile',
     });
-    const stored: StoredDevice = { device_key: deviceKey, token: response.data.token };
-    await writeStoredDevice(stored);
-    return stored;
+    token = response.data.token;
   } catch {
     // Offline on first launch. The cache and queue still work.
     return null;
   }
+  const stored: StoredDevice = { device_key: deviceKey, token };
+  // The server now holds this credential's hash and will not issue another for
+  // this device key without it. It must survive this process.
+  if (!(await persistDeviceVerified(stored))) await keepUnpersistedDevice(stored);
+  return stored;
 }
 
 /** Register once, then reuse. Called on launch, before anything is scanned. */
@@ -274,10 +444,12 @@ export async function markDeviceClaimed(accountId: string): Promise<void> {
 
 /** Forget the device — used when the server no longer recognises the token. */
 async function forgetDevice(): Promise<void> {
-  // Both places: an install part-way through the migration has it in one or
-  // the other, and a token left behind is a credential left behind.
+  // Every place: an install part-way through a migration has it in one or
+  // another, and a token left behind is a credential left behind.
+  unpersistedDevice = null;
   await secureSessionStorage.removeItem(DEVICE_KEY);
   await AsyncStorage.removeItem(DEVICE_KEY).catch(() => {});
+  await AsyncStorage.removeItem(DEVICE_RECOVERY_KEY).catch(() => {});
 }
 
 // --- The offline cache ------------------------------------------------------
@@ -362,7 +534,9 @@ function withQueueLane<T>(work: () => Promise<T>): Promise<T> {
 function isQueuedScan(entry: unknown): entry is QueuedScan {
   if (typeof entry !== 'object' || entry === null) return false;
   const candidate = entry as Partial<QueuedScan>;
-  return typeof candidate.client_scan_id === 'string' && typeof candidate.barcode === 'string';
+  const owner = candidate.owner;
+  return typeof candidate.client_scan_id === 'string' && typeof candidate.barcode === 'string'
+    && (owner === undefined || owner === null || (typeof owner === 'string' && owner !== ''));
 }
 
 /**
@@ -476,6 +650,40 @@ export function syncQueue(): Promise<SyncResult> {
 }
 
 /**
+ * Send one queued scan as the identity it was made under: the request, or
+ * null, having sent nothing, when that identity is not the one signed in now.
+ *
+ * The server attributes a scan to the account whose bearer token it carries,
+ * and to nobody when it carries none (audit lane 1, F03). So the queue must
+ * not let a scan change hands between being made and being sent:
+ *
+ * - **Made signed out:** sent with the device token alone, whoever is signed
+ *   in by the time it goes. It never becomes anybody's scan by waiting.
+ * - **Made as A:** sent only while A is signed in, through the account client
+ *   with ``expectedAccountId: A``, which refuses to send it as anyone else.
+ *   While A is signed out, or B is signed in, it waits, unsent and intact,
+ *   for A. It is never sent anonymously and never as B.
+ *
+ * No token is stored in the queue: an entry names its account, and the
+ * current session supplies the credential at the moment it is sent.
+ */
+function sendQueuedScan(entry: QueuedScan, headers: Record<string, string>): Promise<unknown> | null {
+  // Not ``async``, and the request's own promise: it is issued in the caller's
+  // turn and settles when the request does, exactly as the inline call it
+  // replaced, so a flush reaches the network and finishes no later than it did.
+  const body = {
+    barcode: entry.barcode,
+    client_scan_id: entry.client_scan_id,
+    scanned_at: entry.scanned_at,
+    queued_offline: entry.queued_offline,
+  };
+  const owner = entry.owner ?? null;
+  if (owner === null) return scanApi.post('/api/v2/scan/events', body, { headers });
+  if (owner !== currentOwner()) return null;
+  return api.post('/api/v2/scan/events', body, { headers, expectedAccountId: owner, timeout: LOOKUP_TIMEOUT_MS });
+}
+
+/**
  * One flush: snapshot, send, then remove exactly what was acknowledged from
  * the latest queue.
  */
@@ -489,12 +697,9 @@ async function flushQueueOnce(): Promise<SyncResult> {
   const acknowledged = new Set<string>();
   for (const entry of snapshot) {
     try {
-      await scanApi.post('/api/v2/scan/events', {
-        barcode: entry.barcode,
-        client_scan_id: entry.client_scan_id,
-        scanned_at: entry.scanned_at,
-        queued_offline: entry.queued_offline,
-      }, { headers });
+      const sending = sendQueuedScan(entry, headers);
+      if (sending === null) continue; // waits for the account it was made under
+      await sending;
       acknowledged.add(entry.client_scan_id);
     } catch {
       // Stays queued. It was never acknowledged, so it is never removed.
@@ -531,6 +736,9 @@ function offlineAnswer(barcode: string, cached: ScanResult | null): ScanResult {
  * phone with no signal still answers.
  */
 export async function scanBarcode(barcode: string): Promise<ScanResult> {
+  // Whose scan this is, taken before anything awaits: signing out or switching
+  // account while it is in flight must not change who made it.
+  const owner = currentOwner();
   const clean = (barcode || '').trim();
   const cached = await readCached(clean);
   const scanId = newScanId();
@@ -538,7 +746,7 @@ export async function scanBarcode(barcode: string): Promise<ScanResult> {
 
   let headers = await deviceHeaders();
   if (!headers['X-Device-Token']) {
-    await enqueueScan({ client_scan_id: scanId, barcode: clean, scanned_at: scannedAt, queued_offline: true });
+    await enqueueScan({ client_scan_id: scanId, barcode: clean, scanned_at: scannedAt, queued_offline: true, owner });
     return offlineAnswer(clean, cached);
   }
 
@@ -553,7 +761,7 @@ export async function scanBarcode(barcode: string): Promise<ScanResult> {
     // this write landed before it confirms a pack — see settleScanEvents.
     trackPendingScanEvent(
       clean,
-      enqueueScan({ client_scan_id: scanId, barcode: clean, scanned_at: scannedAt, queued_offline: false })
+      enqueueScan({ client_scan_id: scanId, barcode: clean, scanned_at: scannedAt, queued_offline: false, owner })
         .then(() => syncQueue())
         .then(() => undefined)
         .catch(() => undefined),
@@ -576,7 +784,7 @@ export async function scanBarcode(barcode: string): Promise<ScanResult> {
         }
       }
     }
-    await enqueueScan({ client_scan_id: scanId, barcode: clean, scanned_at: scannedAt, queued_offline: true });
+    await enqueueScan({ client_scan_id: scanId, barcode: clean, scanned_at: scannedAt, queued_offline: true, owner });
     return offlineAnswer(clean, cached);
   }
 }

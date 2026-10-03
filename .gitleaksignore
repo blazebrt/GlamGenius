@@ -18,3 +18,7 @@ d7cad0dca5369dd91dbb5ac81f8dd807b0b4a63a:backend/tests/test_vc_04_open_meteo.py:
 # The live fixture was subsequently made explicitly test-only.
 007b6998d9fc00288b70c55c665564e374620365:frontend/src/__tests__/deviceTokenStorage.test.ts:generic-api-key:79
 2a2c72b410aef9af6445da007193189b1b448f96:frontend/src/__tests__/deviceTokenStorage.test.ts:generic-api-key:79
+
+# Audit Lane 1 deterministic device-storage migration fixture, not a credential.
+# The live fixture was replaced by explicit __TEST_* markers in ead7fb8.
+0edb4b676300dae262c82fbc9b2c2522dd9a0d61:frontend/src/__tests__/credentialPersistenceFaults.test.ts:generic-api-key:99
