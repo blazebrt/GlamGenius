@@ -10,16 +10,22 @@
 import React from 'react';
 import ScanProductScreen from '../../app/scan-product';
 import { render, screen, fireEvent, waitFor, act } from '@testing-library/react-native';
+import { openAuthGeneration } from '../store/authGeneration';
 
 const mockPush = jest.fn();
-let mockFocusCallback: (() => void) | null = null;
+let mockFocusCallback: (() => void | (() => void)) | null = null;
+let mockBlurCallback: (() => void) | null = null;
 
 jest.mock('expo-router', () => ({
   useRouter: () => ({ push: mockPush, back: jest.fn(), replace: jest.fn() }),
-  useFocusEffect: (callback: () => void) => {
+  useFocusEffect: (callback: () => void | (() => void)) => {
     const React2 = jest.requireActual<typeof React>('react');
     mockFocusCallback = callback;
-    React2.useEffect(callback, [callback]);
+    React2.useEffect(() => {
+      const cleanup = callback();
+      if (typeof cleanup === 'function') mockBlurCallback = cleanup;
+      return cleanup;
+    }, [callback]);
   },
 }));
 
@@ -143,8 +149,10 @@ const presentable = {
 };
 
 beforeEach(() => {
+  openAuthGeneration('account-1');
   jest.clearAllMocks();
   mockFocusCallback = null;
+  mockBlurCallback = null;
   mockReadQueue.mockResolvedValue([]);
   mockEnsureClaimed.mockResolvedValue(true);
   mockSettleScanEvents.mockResolvedValue(true);
@@ -156,10 +164,9 @@ beforeEach(() => {
 });
 
 /** Drive the screen from a barcode read to a confirmed skin-care pack. */
-async function reachConfirmedPack() {
-  render(<ScanProductScreen />);
+async function confirmFromCamera(barcode = BARCODE) {
   const camera = screen.getByTestId('scan-camera');
-  await act(async () => { camera.props.onBarcodeScanned({ data: BARCODE }); });
+  await act(async () => { camera.props.onBarcodeScanned({ data: barcode }); });
   await screen.findByLabelText('Photograph the label');
   fireEvent.press(screen.getByLabelText('Photograph the label'));
 
@@ -172,6 +179,28 @@ async function reachConfirmedPack() {
   await screen.findByTestId('skin-care-confirm');
   await act(async () => { fireEvent.press(screen.getByTestId('skin-care-confirm')); });
   await screen.findByText('Skin care label confirmed');
+}
+
+async function reachConfirmedPack() {
+  render(<ScanProductScreen />);
+  await confirmFromCamera();
+}
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (error: Error) => void;
+  const promise = new Promise<T>((yes, no) => { resolve = yes; reject = no; });
+  return { promise, resolve, reject };
+}
+
+async function requestForYou() {
+  await act(async () => { fireEvent.press(screen.getByTestId('safety-none')); });
+  await act(async () => { fireEvent.press(screen.getByTestId('safety-submit')); });
+}
+
+async function confirmOtherPack(barcode: string) {
+  fireEvent.press(screen.getByLabelText('Scan another'));
+  await confirmFromCamera(barcode);
 }
 
 describe('the category boundary', () => {
@@ -543,5 +572,132 @@ describe('FOR YOU failure', () => {
     // The confirmed label is still there and the person can move on.
     expect(screen.getByText('Skin care label confirmed')).toBeTruthy();
     expect(screen.getByLabelText('Scan another')).toBeTruthy();
+  });
+});
+
+describe('FOR YOU request and pack authority', () => {
+  const otherBarcode = '8901030000028';
+  const answer = (barcode: string, verdict: string) => ({
+    ...presentable,
+    barcode,
+    result: { ...presentable.result, verdict_text: verdict },
+  });
+
+  function serveTwoPacks() {
+    mockScanBarcode.mockImplementation(async (barcode: string) => ({ ...notFound, barcode }));
+    mockTranscribeSkin.mockImplementation(async (barcode: string) => ({ ...skinDraft, barcode }));
+    mockConfirmSkinCare.mockImplementation(async (barcode: string) => ({
+      ...confirmedPack, barcode, scan_id: `scan-${barcode}`,
+      label_snapshot: { ...confirmedPack.label_snapshot, id: `snapshot-${barcode}` },
+    }));
+  }
+
+  it('discards A success after B succeeds, without replacing B or showing A', async () => {
+    serveTwoPacks();
+    const a = deferred<typeof presentable>();
+    const b = deferred<typeof presentable>();
+    mockFetchForYou.mockImplementationOnce(() => a.promise).mockImplementationOnce(() => b.promise);
+    await reachConfirmedPack();
+    await requestForYou();
+    await waitFor(() => expect(mockFetchForYou).toHaveBeenCalledWith(BARCODE, {}));
+    await confirmOtherPack(otherBarcode);
+    await requestForYou();
+    await waitFor(() => expect(mockFetchForYou).toHaveBeenCalledWith(otherBarcode, {}));
+
+    await act(async () => { b.resolve(answer(otherBarcode, 'B VERDICT')); });
+    expect(await screen.findByText('B VERDICT')).toBeTruthy();
+    await act(async () => { a.resolve(answer(BARCODE, 'A VERDICT')); });
+    expect(screen.getByText('B VERDICT')).toBeTruthy();
+    expect(screen.queryByText('A VERDICT')).toBeNull();
+  });
+
+  it('discards A failure after B succeeds, including A retry/unavailable state', async () => {
+    serveTwoPacks();
+    const a = deferred<typeof presentable>();
+    const b = deferred<typeof presentable>();
+    mockFetchForYou.mockImplementationOnce(() => a.promise).mockImplementationOnce(() => b.promise);
+    await reachConfirmedPack();
+    await requestForYou();
+    await confirmOtherPack(otherBarcode);
+    await requestForYou();
+    await act(async () => { b.resolve(answer(otherBarcode, 'B VERDICT')); });
+    await screen.findByText('B VERDICT');
+    await act(async () => { a.reject(new Error('A failed')); });
+    expect(screen.getByText('B VERDICT')).toBeTruthy();
+    expect(screen.queryByTestId('for-you-technical-unavailable')).toBeNull();
+    expect(screen.queryByTestId('for-you-retry')).toBeNull();
+  });
+
+  it('does not show A unavailable/retry when its empty response follows B', async () => {
+    serveTwoPacks();
+    const a = deferred<typeof presentable | null>();
+    const b = deferred<typeof presentable>();
+    mockFetchForYou.mockImplementationOnce(() => a.promise).mockImplementationOnce(() => b.promise);
+    await reachConfirmedPack();
+    await requestForYou();
+    await confirmOtherPack(otherBarcode);
+    await requestForYou();
+    await act(async () => { b.resolve(answer(otherBarcode, 'B VERDICT')); });
+    await screen.findByText('B VERDICT');
+    await act(async () => { a.resolve(null); });
+    expect(screen.getByText('B VERDICT')).toBeTruthy();
+    expect(screen.queryByTestId('for-you-retry')).toBeNull();
+  });
+
+  it('cannot finish B loading when stale A completes first', async () => {
+    serveTwoPacks();
+    const a = deferred<typeof presentable>();
+    const b = deferred<typeof presentable>();
+    mockFetchForYou.mockImplementationOnce(() => a.promise).mockImplementationOnce(() => b.promise);
+    await reachConfirmedPack();
+    await requestForYou();
+    await confirmOtherPack(otherBarcode);
+    await requestForYou();
+    await act(async () => { a.resolve(answer(BARCODE, 'A VERDICT')); });
+    expect(screen.getByTestId('for-you-loading')).toBeTruthy();
+    expect(screen.queryByText('A VERDICT')).toBeNull();
+    await act(async () => { b.resolve(answer(otherBarcode, 'B VERDICT')); });
+    expect(await screen.findByText('B VERDICT')).toBeTruthy();
+  });
+
+  it('keeps the newer request for the same barcode authoritative', async () => {
+    const first = deferred<typeof presentable>();
+    const second = deferred<typeof presentable>();
+    mockFetchForYou.mockImplementationOnce(() => first.promise).mockImplementationOnce(() => second.promise);
+    await reachConfirmedPack();
+    await requestForYou();
+    await act(async () => { mockFocusCallback?.(); });
+    await waitFor(() => expect(mockFetchForYou).toHaveBeenCalledTimes(2));
+    await act(async () => { second.resolve(answer(BARCODE, 'NEWER VERDICT')); });
+    await screen.findByText('NEWER VERDICT');
+    await act(async () => { first.resolve(answer(BARCODE, 'OLDER VERDICT')); });
+    expect(screen.getByText('NEWER VERDICT')).toBeTruthy();
+    expect(screen.queryByText('OLDER VERDICT')).toBeNull();
+  });
+
+  it('discards a completion after auth generation changes', async () => {
+    const pending = deferred<typeof presentable>();
+    mockFetchForYou.mockImplementationOnce(() => pending.promise);
+    await reachConfirmedPack();
+    await requestForYou();
+    openAuthGeneration('another-account');
+    try {
+      await act(async () => { pending.resolve(answer(BARCODE, 'OLD ACCOUNT VERDICT')); });
+      expect(screen.queryByText('OLD ACCOUNT VERDICT')).toBeNull();
+    } finally {
+      openAuthGeneration('account-1');
+    }
+  });
+
+  it('discards a completion after navigation blur while the screen remains mounted', async () => {
+    const pending = deferred<typeof presentable>();
+    mockFetchForYou.mockImplementationOnce(() => pending.promise);
+    await reachConfirmedPack();
+    await requestForYou();
+    expect(mockBlurCallback).not.toBeNull();
+    mockBlurCallback?.();
+    await act(async () => { pending.resolve(answer(BARCODE, 'BLURRED VERDICT')); });
+    expect(screen.queryByText('BLURRED VERDICT')).toBeNull();
+    expect(screen.queryByTestId('for-you-technical-unavailable')).toBeNull();
   });
 });
