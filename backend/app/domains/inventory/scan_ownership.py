@@ -26,6 +26,8 @@ from app.domains.product.service import label_content_fingerprint
 
 CONTRACT_VERSION = "step-10a-v1"
 ELIGIBLE_CATEGORIES = frozenset({"beauty", "hair", "perfumes"})
+SKIN_CARE_LABEL_CATEGORY = "skin_care"
+SKIN_CARE_SHELF_CATEGORY = "beauty"
 
 
 class OwnershipConflict(ValueError):
@@ -38,8 +40,19 @@ def _text(facts: dict[str, Any], key: str, maximum: int) -> str | None:
 
 
 def _category_and_identity(facts: dict[str, Any]) -> tuple[str, str, str | None]:
-    """Map only confirmed Store-B facts; never product/reference catalog data."""
-    category = _text(facts, "product_category", 32)
+    """Map confirmed Store-B pack facts into the governed shelf vocabulary.
+
+    Skin-care label capture persists ``skin_care`` as its evidence/decision
+    domain, including in the immutable label fingerprint. The shelf's Skin Care
+    category is ``beauty``. Translate only at this ownership boundary, for
+    both existing captures and new writes; never rewrite the source snapshot.
+    """
+    label_category = _text(facts, "product_category", 32)
+    category = (
+        SKIN_CARE_SHELF_CATEGORY
+        if label_category == SKIN_CARE_LABEL_CATEGORY
+        else label_category
+    )
     name = _text(facts, "product_name", 160)
     brand = _text(facts, "brand", 120)
     if category not in ELIGIBLE_CATEGORIES:

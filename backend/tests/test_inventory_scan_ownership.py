@@ -11,6 +11,7 @@ from app.domains.inventory import scan_ownership
 from app.domains.inventory.models import InventoryItem, InventoryProductLink
 from app.domains.inventory.schemas import ItemCreate, ScanOwnershipCreate
 from app.domains.inventory.service import create_item, serialize_item
+from app.domains.inventory.taxonomy import CATEGORIES
 from app.domains.off.models import OffProduct
 from app.domains.off.store import get_off_sessionmaker
 from app.domains.privacy import deletion_service
@@ -29,6 +30,28 @@ pytestmark = pytest.mark.asyncio
 def _facts(name="Verified Cleanser"):
     """Confirmed Store-B facts. A different name is a different formula version."""
     return {"product_category": "beauty", "product_name": name, "brand": "Verified Brand"}
+
+
+@pytest.mark.parametrize("label_category,shelf_category", [
+    ("skin_care", "beauty"), ("beauty", "beauty"),
+    ("hair", "hair"), ("perfumes", "perfumes"),
+])
+async def test_category_projection_is_exact_and_does_not_rewrite_label(
+    label_category, shelf_category,
+):
+    facts = {"product_category": label_category, "product_name": "Confirmed Product"}
+    assert scan_ownership._category_and_identity(facts)[0] == shelf_category
+    assert facts["product_category"] == label_category
+    assert {"beauty", "hair", "perfumes"} == scan_ownership.ELIGIBLE_CATEGORIES
+    assert len(CATEGORIES) == 4
+
+
+@pytest.mark.parametrize("category", ["hair_care", "wardrobe", "supplements", "unknown"])
+async def test_category_projection_rejects_unreleased_or_arbitrary_labels(category):
+    with pytest.raises(ValueError, match="cannot be added"):
+        scan_ownership._category_and_identity({
+            "product_category": category, "product_name": "Unsupported Product",
+        })
 
 
 async def _chain(account_id, *, barcode="8901234567890", version=1, fingerprint=None, facts=None, product_id=None):
@@ -79,6 +102,55 @@ async def test_add_and_exact_status(app_client: AsyncClient, db_clean, registere
     assert links[0].product_record_id == product_id and links[0].label_snapshot_id == snap.id and links[0].content_fingerprint == label_content_fingerprint(_facts())
     after = await app_client.get(f"/api/v2/inventory/from-scan/{body['barcode']}/status", headers=headers, params={k: body[k] for k in ("label_snapshot_id", "label_version", "content_fingerprint")})
     assert after.json()["status"] == "owned" and after.json()["inventory_item_id"] == added.json()["inventory_item_id"]
+
+
+@pytest.mark.parametrize("label_category,shelf_category", [
+    ("skin_care", "beauty"), ("beauty", "beauty"),
+    ("hair", "hair"), ("perfumes", "perfumes"),
+])
+async def test_confirmed_pack_category_crosses_exact_shelf_boundary(
+    app_client: AsyncClient, db_clean, registered_supabase_user, label_category, shelf_category,
+):
+    token, account = await registered_supabase_user()
+    facts = {"product_category": label_category, "product_name": "Confirmed Product", "brand": "Test Brand"}
+    device, _, snapshot = await _chain(account, facts=facts)
+    body = _body(snapshot, f"category-{label_category}")
+    headers = _headers(token, device)
+    status = await app_client.get(
+        f"/api/v2/inventory/from-scan/{snapshot.barcode}/status", headers=headers,
+        params={key: body[key] for key in ("label_snapshot_id", "label_version", "content_fingerprint")},
+    )
+    assert status.status_code == 200 and status.json()["status"] == "eligible_not_owned"
+    added = await app_client.post("/api/v2/inventory/from-scan", headers=headers, json=body)
+    assert added.status_code == 200 and added.json()["status"] == "owned"
+    items, links = await _rows(account)
+    assert len(items) == len(links) == 1
+    assert items[0].category == shelf_category
+    assert links[0].content_fingerprint == snapshot.content_fingerprint
+    assert snapshot.facts["product_category"] == label_category
+    assert {
+        "beauty": "Skin Care", "hair": "Hair Care",
+        "perfumes": "Perfumes", "supplements": "Supplements",
+    } == CATEGORIES
+
+
+@pytest.mark.parametrize("category", ["hair_care", "wardrobe", "supplements", "unknown"])
+async def test_unsupported_confirmed_pack_category_stays_outside_shelf(
+    app_client: AsyncClient, db_clean, registered_supabase_user, category,
+):
+    token, account = await registered_supabase_user()
+    facts = {"product_category": category, "product_name": "Unsupported Product"}
+    device, _, snapshot = await _chain(account, facts=facts)
+    body = _body(snapshot, f"unsupported-{category}")
+    headers = _headers(token, device)
+    status = await app_client.get(
+        f"/api/v2/inventory/from-scan/{snapshot.barcode}/status", headers=headers,
+        params={key: body[key] for key in ("label_snapshot_id", "label_version", "content_fingerprint")},
+    )
+    assert status.status_code == 200 and status.json()["status"] == "not_enough_information"
+    added = await app_client.post("/api/v2/inventory/from-scan", headers=headers, json=body)
+    assert added.status_code == 422
+    assert await _rows(account) == ([], [])
 
 
 async def test_foreign_authority_mismatch_and_off_like_facts_create_nothing(app_client: AsyncClient, db_clean, registered_supabase_user):
