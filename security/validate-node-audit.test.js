@@ -1,5 +1,6 @@
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
+const path = require("node:path");
 const test = require("node:test");
 
 const {
@@ -9,11 +10,9 @@ const {
   validateRegistry,
 } = require("./validate-node-audit");
 
-// Frozen fixtures rather than the live registries. Both governed advisories
-// are remediated and the shipped registries are now empty, but the validator's
-// rules about accepted exceptions and scanner false positives still need a
-// well-formed record to be exercised against, and reading that record out of
-// the live registry meant fixing the vulnerability deleted the tests' inputs.
+// Frozen fixtures rather than the live registries. The earlier image-size and
+// Nano ID findings were remediated, so their validator rules still need
+// fixtures independent of today's separate node-forge and braces exceptions.
 // See node-audit-fixtures.js.
 const {
   exceptionRegistry,
@@ -33,6 +32,36 @@ const shippedExceptionRegistry = JSON.parse(
 const shippedFalsePositiveRegistry = JSON.parse(
   fs.readFileSync(`${__dirname}/node-audit-false-positives.json`, "utf8"),
 );
+
+test("Yarn is the sole committed frontend dependency authority", () => {
+  const root = path.resolve(__dirname, "..");
+  const frontend = path.join(root, "frontend");
+  const manifest = JSON.parse(fs.readFileSync(path.join(frontend, "package.json"), "utf8"));
+  assert.match(manifest.packageManager, /^yarn@/);
+  assert.equal(fs.existsSync(path.join(frontend, "yarn.lock")), true);
+  assert.equal(fs.existsSync(path.join(frontend, "package-lock.json")), false);
+  assert.match(fs.readFileSync(path.join(root, ".gitignore"), "utf8"), /^\/frontend\/package-lock\.json$/m);
+});
+
+test("node-forge compensating control describes the shipped Yarn-only authority", () => {
+  const root = path.resolve(__dirname, "..");
+  const frontend = path.join(root, "frontend");
+  const manifest = JSON.parse(fs.readFileSync(path.join(frontend, "package.json"), "utf8"));
+  const nodeForge = shippedExceptionRegistry.exceptions.find(
+    (exception) => exception.advisory_id === "GHSA-86w9-cpqp-85rv",
+  );
+  assert.ok(nodeForge);
+  const authorityControl = nodeForge.compensating_controls.find(
+    (control) => control.includes("CI installs with yarn install --frozen-lockfile"),
+  );
+  assert.equal(
+    authorityControl,
+    "Frontend dependency versions are frozen by the committed yarn.lock under the declared Yarn 1.22.22 package-manager authority; CI installs with yarn install --frozen-lockfile, and frontend/package-lock.json is intentionally absent and guarded against reintroduction.",
+  );
+  assert.match(manifest.packageManager, /^yarn@1\.22\.22\+sha512\./);
+  assert.equal(fs.existsSync(path.join(frontend, "yarn.lock")), true);
+  assert.equal(fs.existsSync(path.join(frontend, "package-lock.json")), false);
+});
 
 function auditAdvisory({
   advisoryId,
@@ -359,17 +388,14 @@ test("existing image-size dependency-path contract remains strict", () => {
 
 // ---- The remediated state -------------------------------------------------
 // September 2026: metro 0.83.8 dropped its `image-size` dependency and the
-// nanoid resolution moved to the patched 3.3.18, so nothing in the tree needs
-// governing and both shipped registries are empty. The registry rules have to
-// admit that state without admitting anything else.
+// nanoid resolution moved to the patched 3.3.18. October's real node-forge
+// and braces HIGHs are separately governed below; the false-positive registry
+// remains empty.
 
-test("the shipped registries validate and govern only the node-forge advisory", () => {
-  // October 2026: GHSA-86w9-cpqp-85rv (node-forge, no patched release) is the
-  // one governed advisory; see the section at the end of this file. When it
-  // is remediated the exception registry returns to empty, and this test with it.
+test("the shipped registries govern exactly node-forge and braces", () => {
   assert.deepEqual(
     validateRegistry(shippedExceptionRegistry).map((exception) => exception.advisory_id),
-    ["GHSA-86w9-cpqp-85rv"],
+    ["GHSA-86w9-cpqp-85rv", "GHSA-vfj7-8cjw-p6xm"],
   );
   assert.deepEqual(validateFalsePositiveRegistry(shippedFalsePositiveRegistry), []);
 });
@@ -779,7 +805,7 @@ function shippedRegistryWith(mutate) {
 test("node-forge: the shipped record is exactly the CI finding, with the proven reachability", () => {
   const exception = shippedNodeForgeException();
   assert.ok(exception, "the shipped registry must govern GHSA-86w9-cpqp-85rv");
-  assert.equal(shippedExceptionRegistry.exceptions.length, 1);
+  assert.equal(shippedExceptionRegistry.exceptions.length, 2);
   assert.equal(exception.cve, NODE_FORGE.cve);
   assert.equal(exception.package, NODE_FORGE.packageName);
   assert.equal(exception.installed_version, NODE_FORGE.version);
@@ -1012,9 +1038,228 @@ test("node-forge 10: removing the registry entry while the vulnerable audit rema
   const removed = shippedRegistryWith((exception, copy) => {
     copy.exceptions = copy.exceptions.filter((candidate) => candidate !== exception);
   });
-  assert.deepEqual(validateRegistry(removed), []);
+  assert.deepEqual(validateRegistry(removed).map((exception) => exception.advisory_id), ["GHSA-vfj7-8cjw-p6xm"]);
   assert.throws(
     () => rawValidateAuditText(completedNodeForgeAudit(), removed, shippedFalsePositiveRegistry, { today: NODE_FORGE_DAY }),
     /Unaccepted HIGH advisory GHSA-86w9-cpqp-85rv for node-forge \(1\.4\.0\)/,
+  );
+});
+
+// ---- GHSA-vfj7-8cjw-p6xm: bounded build/test-tooling exception ------------
+// The scanner reports ten Jest paths. The complete Yarn graph also includes
+// Expo > @expo/metro > metro-file-map > micromatch > braces; that build-tool
+// path is assessed in the exception prose even though Yarn audit omits it.
+const BRACES = {
+  advisoryId: "GHSA-vfj7-8cjw-p6xm",
+  cve: "CVE-2026-93687",
+  packageName: "braces",
+  version: "3.0.3",
+  severity: "high",
+  paths: [
+    "@types/jest>expect>jest-message-util>micromatch>braces",
+    "jest-expo>@jest/globals>@jest/expect>expect>jest-message-util>micromatch>braces",
+    "jest-expo>@jest/globals>@jest/expect>jest-snapshot>expect>jest-message-util>micromatch>braces",
+    "jest-expo>jest-snapshot>expect>jest-message-util>micromatch>braces",
+    "jest>@jest/core>jest-config>jest-circus>@jest/expect>expect>jest-message-util>micromatch>braces",
+    "jest>@jest/core>jest-config>jest-circus>jest-runtime>@jest/globals>@jest/expect>expect>jest-message-util>micromatch>braces",
+    "jest>@jest/core>micromatch>braces",
+    "jest>jest-cli>@jest/core>jest-config>jest-circus>@jest/expect>expect>jest-message-util>micromatch>braces",
+    "jest>jest-cli>@jest/core>jest-config>jest-circus>jest-runtime>@jest/globals>@jest/expect>expect>jest-message-util>micromatch>braces",
+    "jest>jest-cli>@jest/core>jest-config>jest-circus>jest-runtime>@jest/globals>@jest/expect>jest-snapshot>expect>jest-message-util>micromatch>braces",
+  ],
+};
+const BRACES_DAY = "2026-10-03";
+
+function shippedBracesException() {
+  return shippedExceptionRegistry.exceptions.find((exception) => exception.advisory_id === BRACES.advisoryId);
+}
+
+function bracesRegistryWith(mutate) {
+  const copy = JSON.parse(JSON.stringify(shippedExceptionRegistry));
+  mutate(copy.exceptions.find((exception) => exception.advisory_id === BRACES.advisoryId), copy);
+  return copy;
+}
+
+function bracesAudit(overrides = {}) {
+  const finding = { ...BRACES, ...overrides };
+  return finding.paths.map((resolutionPath) => JSON.stringify({
+    type: "auditAdvisory",
+    data: {
+      resolution: { path: resolutionPath },
+      advisory: {
+        cves: finding.cves ?? [finding.cve],
+        findings: [{ paths: finding.paths, version: finding.version }],
+        github_advisory_id: finding.advisoryId,
+        module_name: finding.packageName,
+        severity: finding.severity,
+      },
+    },
+  })).join("\n");
+}
+
+function completedBracesAudit(overrides = {}) {
+  const severity = overrides.severity || BRACES.severity;
+  return `${bracesAudit(overrides)}\n${cleanAudit({ [severity]: (overrides.paths || BRACES.paths).length })}`;
+}
+
+function validateBraces(audit = completedBracesAudit(), exceptions = shippedExceptionRegistry, today = BRACES_DAY) {
+  return rawValidateAuditText(audit, exceptions, shippedFalsePositiveRegistry, { today });
+}
+
+test("braces: shipped exception pins the exact ten scanner paths and acknowledges Metro", () => {
+  const exception = shippedBracesException();
+  assert.ok(exception);
+  assert.equal(exception.cve, BRACES.cve);
+  assert.equal(exception.package, BRACES.packageName);
+  assert.equal(exception.installed_version, BRACES.version);
+  assert.equal(exception.severity, BRACES.severity);
+  assert.deepEqual(exception.dependency_paths, BRACES.paths);
+  assert.deepEqual(
+    [exception.created_date, exception.review_date, exception.expiry_date],
+    ["2026-10-03", "2026-10-10", "2026-10-17"],
+  );
+  assert.equal(exception.owner, "@blazebrt");
+  assert.equal(exception.production_runtime_reachable, false);
+  assert.equal(exception.production_user_input_reachable, false);
+  assert.equal(exception.build_ci_reachable, true);
+  assert.match(exception.reachability_assessment, /expo > @expo\/metro > metro-file-map@0\.83\.8 > micromatch@4\.0\.8 > braces@3\.0\.3/);
+  assert.match(exception.reachability_assessment, /not a Jest-only or dev-dependency-only graph/);
+  assert.match(exception.reachability_assessment, /micromatch\.some\(relativePath, globs\)/);
+  assert.deepEqual(shippedFalsePositiveRegistry.false_positives, []);
+});
+
+test("braces: exact completed finding is a visible temporary exception", () => {
+  const result = validateBraces();
+  assert.deepEqual(result.acceptedExceptions.map((exception) => exception.advisory_id), [BRACES.advisoryId]);
+  assert.equal(result.falsePositiveFindings.length, 0);
+  assert.deepEqual([...result.findings[0].paths].sort(), [...BRACES.paths].sort());
+  assert.match(formatPass(result), /Accepted temporary exceptions: 1/);
+  assert.match(formatPass(result), /braces@3\.0\.3/);
+  const both = rawValidateAuditText(
+    `${nodeForgeAudit()}\n${bracesAudit()}\n${cleanAudit({ high: 12 })}`,
+    shippedExceptionRegistry, shippedFalsePositiveRegistry, { today: BRACES_DAY },
+  );
+  assert.deepEqual(both.acceptedExceptions.map((exception) => exception.advisory_id), [NODE_FORGE.advisoryId, BRACES.advisoryId]);
+  assert.match(formatPass(both), /Accepted temporary exceptions: 2/);
+  assert.match(formatPass(both), /Unaccepted HIGH: 0/);
+  assert.match(formatPass(both), /Unaccepted CRITICAL: 0/);
+});
+
+test("braces: another advisory fails", () => {
+  assert.throws(() => validateBraces(completedBracesAudit({ advisoryId: "GHSA-other-braces" })), /Unaccepted HIGH advisory GHSA-other-braces/);
+});
+
+test("braces: another CVE fails", () => {
+  assert.throws(() => validateBraces(completedBracesAudit({ cve: "CVE-2099-0001" })), /does not match reported CVE/);
+});
+
+test("braces: an omitted CVE fails", () => {
+  assert.throws(() => validateBraces(completedBracesAudit({ cves: [] })), /does not match reported CVE/);
+});
+
+test("braces: an additional CVE fails", () => {
+  assert.throws(
+    () => validateBraces(completedBracesAudit({ cves: [BRACES.cve, "CVE-2099-0001"] })),
+    /does not match reported CVE/,
+  );
+});
+
+test("braces: another package fails", () => {
+  assert.throws(() => validateBraces(completedBracesAudit({ packageName: "braces-fork" })), /Unaccepted HIGH advisory .*braces-fork/);
+});
+
+test("braces: another installed version fails", () => {
+  assert.throws(() => validateBraces(completedBracesAudit({ version: "3.0.4" })), /does not match installed version/);
+});
+
+test("braces: a missing scanner path fails", () => {
+  assert.throws(
+    () => validateBraces(completedBracesAudit({ paths: BRACES.paths.slice(1) })),
+    /does not match the complete dependency path set/,
+  );
+});
+
+test("braces: an additional scanner path fails", () => {
+  assert.throws(
+    () => validateBraces(completedBracesAudit({ paths: [...BRACES.paths, "expo>@expo/metro>metro-file-map>micromatch>braces"] })),
+    /does not allow dependency path expo>@expo\/metro>metro-file-map>micromatch>braces/,
+  );
+});
+
+test("braces: CRITICAL substitution fails", () => {
+  assert.throws(() => validateBraces(completedBracesAudit({ severity: "critical" })), /Unaccepted CRITICAL advisory/);
+});
+
+test("braces: missing reachability fields fail", () => {
+  for (const field of ["reachability_assessment", "production_runtime_reachable", "production_user_input_reachable", "build_ci_reachable", "compensating_controls"]) {
+    const incomplete = bracesRegistryWith((exception) => { delete exception[field]; });
+    assert.throws(() => validateBraces(completedBracesAudit(), incomplete), new RegExp(`missing required field ${field}`));
+  }
+});
+
+test("braces: production-runtime reachability cannot be accepted", () => {
+  const reachable = bracesRegistryWith((exception) => { exception.production_runtime_reachable = true; });
+  assert.throws(() => validateBraces(completedBracesAudit(), reachable), /cannot accept production-runtime or user-input reachability/);
+});
+
+test("braces: user-input reachability cannot be accepted", () => {
+  const reachable = bracesRegistryWith((exception) => { exception.production_user_input_reachable = true; });
+  assert.throws(() => validateBraces(completedBracesAudit(), reachable), /cannot accept production-runtime or user-input reachability/);
+});
+
+test("braces: review warning and expiry boundary remain enforced", () => {
+  const review = validateBraces(completedBracesAudit(), shippedExceptionRegistry, "2026-10-10");
+  assert.deepEqual(review.reviewWarnings, [
+    "SECURITY EXCEPTION REVIEW DUE: GHSA-vfj7-8cjw-p6xm review_date=2026-10-10 expiry_date=2026-10-17",
+  ]);
+  assert.throws(
+    () => validateBraces(completedBracesAudit(), shippedExceptionRegistry, "2026-10-17"),
+    /Security exception GHSA-vfj7-8cjw-p6xm expired on 2026-10-17/,
+  );
+});
+
+test("braces: removing its record leaves the HIGH unaccepted", () => {
+  const removed = bracesRegistryWith((exception, copy) => {
+    copy.exceptions = copy.exceptions.filter((candidate) => candidate !== exception);
+  });
+  assert.throws(() => validateBraces(completedBracesAudit(), removed), /Unaccepted HIGH advisory GHSA-vfj7-8cjw-p6xm/);
+});
+
+test("braces: false-positive substitution fails", () => {
+  const exception = shippedBracesException();
+  const falsePositive = {
+    schema_version: 1,
+    false_positives: [{
+      advisory_id: exception.advisory_id,
+      cve: exception.cve,
+      package: exception.package,
+      installed_version: exception.installed_version,
+      severity: exception.severity,
+      dependency_paths: exception.dependency_paths,
+      authoritative_affected_range: "<= 3.0.3",
+      authoritative_patched_version: "3.0.4",
+      reason: "Incorrectly called a false positive",
+      authoritative_source: "https://github.com/advisories/GHSA-vfj7-8cjw-p6xm",
+      owner: exception.owner,
+      created_date: exception.created_date,
+      review_date: exception.review_date,
+      expiry_date: exception.expiry_date,
+      removal_condition: exception.removal_condition,
+    }],
+  };
+  const removed = bracesRegistryWith((record, copy) => {
+    copy.exceptions = copy.exceptions.filter((candidate) => candidate !== record);
+  });
+  assert.throws(() => rawValidateAuditText(completedBracesAudit(), removed, falsePositive, { today: BRACES_DAY }), /frozen Nano ID identity contract/);
+});
+
+test("http-cache-semantics remains unaccepted rather than hidden by a new exception", () => {
+  assert.equal(shippedExceptionRegistry.exceptions.some((exception) => exception.package === "http-cache-semantics"), false);
+  assert.throws(
+    () => rawValidateAuditText(
+      `${auditAdvisory({ advisoryId: "GHSA-ch52-4w7c-c8xp", cve: "CVE-2026-93748", packageName: "http-cache-semantics", version: "4.2.0", paths: ["@expo/ngrok>got>cacheable-request>http-cache-semantics"] })}\n${cleanAudit({ high: 1 })}`,
+      shippedExceptionRegistry, shippedFalsePositiveRegistry, { today: BRACES_DAY },
+    ),
+    /Unaccepted HIGH advisory GHSA-ch52-4w7c-c8xp/,
   );
 });

@@ -134,6 +134,9 @@ function validateRegistry(registry) {
         fail(`Exception ${index} field ${booleanField} must be boolean`);
       }
     }
+    if (exception.production_runtime_reachable || exception.production_user_input_reachable) {
+      fail(`Exception ${index} cannot accept production-runtime or user-input reachability`);
+    }
     if (!Array.isArray(exception.compensating_controls) || exception.compensating_controls.length === 0) {
       fail(`Exception ${index} must contain compensating_controls`);
     }
@@ -621,7 +624,7 @@ function validateAuditText(auditText, registry, falsePositiveRegistryOrOptions =
           `${[...finding.versions].join(", ")}`,
       );
     }
-    if (finding.cves.size > 0 && !finding.cves.has(exception.cve)) {
+    if (finding.cves.size !== 1 || !finding.cves.has(exception.cve)) {
       fail(`Security exception ${exception.advisory_id} does not match reported CVE(s)`);
     }
     const allowedPaths = new Set(exception.dependency_paths);
@@ -629,6 +632,9 @@ function validateAuditText(auditText, registry, falsePositiveRegistryOrOptions =
       if (!allowedPaths.has(dependencyPath)) {
         fail(`Security exception ${exception.advisory_id} does not allow dependency path ${dependencyPath}`);
       }
+    }
+    if (finding.paths.size !== allowedPaths.size) {
+      fail(`Security exception ${exception.advisory_id} does not match the complete dependency path set`);
     }
     accepted.push(exception);
   }

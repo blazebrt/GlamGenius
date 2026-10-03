@@ -22,7 +22,7 @@
         "GlamGenius application source does not import node-forge, forge or @expo/code-signing-certificates.",
         "No expo-updates dependency and no updates, codeSigningCertificate, codeSigningMetadata or EAS projectId in the resolved Expo config; CI never runs expo start, so the affected signing and verification path is not invoked.",
         "The production server images copy only the Python backend; frontend/ and node_modules/ are excluded by .dockerignore.",
-        "Dependency versions are frozen by the committed yarn.lock and package-lock.json; CI installs with yarn install --frozen-lockfile.",
+        "Frontend dependency versions are frozen by the committed yarn.lock under the declared Yarn 1.22.22 package-manager authority; CI installs with yarn install --frozen-lockfile, and frontend/package-lock.json is intentionally absent and guarded against reintroduction.",
         "CI runs the Yarn audit and this validator on every push to main, in the weekly scheduled run, and on every PR that changes dependencies or the audit gate.",
         "The exception is scoped to exactly this advisory, CVE, package, installed version, HIGH severity and these two dependency paths. CI fails if the advisory, CVE, package, version or severity changes, if it is reported as CRITICAL, or if any other dependency path appears.",
         "Expiry is enforced automatically: the validator fails the build on and after expiry_date and prints a review-due warning from review_date."
@@ -33,6 +33,46 @@
       "expiry_date": "2026-10-16",
       "removal_condition": "Remove immediately when any of these occurs: (1) Digital Bazaar publishes a fixed node-forge release covering CVE-2026-85393; (2) Expo removes or replaces the vulnerable dependency; (3) GlamGenius upgrades to an Expo dependency tree without the vulnerable package; (4) GlamGenius adopts Expo Updates or code signing, or any other path that makes the affected verifier production- or user-input reachable; (5) any reachability assumption above changes; (6) the exception reaches expiry_date. Never auto-extend: renewal needs a fresh reachability review.",
       "upstream_tracking": "Advisory GHSA-86w9-cpqp-85rv / CVE-2026-85393 (https://github.com/advisories/GHSA-86w9-cpqp-85rv; no patched version listed, last updated 2026-10-01). Upstream fix digitalbazaar/forge#1152 (https://github.com/digitalbazaar/forge/pull/1152), 'Fix RSA PKCS#1 v1.5 forgery via nested DigestAlgorithm garbage': open and unmerged on 2026-10-02 (head ceba3440, not in forge main 72324041). Upstream issue digitalbazaar/forge#1149. Re-check npm node-forge releases at every review."
+    },
+    {
+      "advisory_id": "GHSA-vfj7-8cjw-p6xm",
+      "cve": "CVE-2026-93687",
+      "package": "braces",
+      "installed_version": "3.0.3",
+      "severity": "high",
+      "dependency_paths": [
+        "@types/jest>expect>jest-message-util>micromatch>braces",
+        "jest-expo>@jest/globals>@jest/expect>expect>jest-message-util>micromatch>braces",
+        "jest-expo>@jest/globals>@jest/expect>jest-snapshot>expect>jest-message-util>micromatch>braces",
+        "jest-expo>jest-snapshot>expect>jest-message-util>micromatch>braces",
+        "jest>@jest/core>jest-config>jest-circus>@jest/expect>expect>jest-message-util>micromatch>braces",
+        "jest>@jest/core>jest-config>jest-circus>jest-runtime>@jest/globals>@jest/expect>expect>jest-message-util>micromatch>braces",
+        "jest>@jest/core>micromatch>braces",
+        "jest>jest-cli>@jest/core>jest-config>jest-circus>@jest/expect>expect>jest-message-util>micromatch>braces",
+        "jest>jest-cli>@jest/core>jest-config>jest-circus>jest-runtime>@jest/globals>@jest/expect>expect>jest-message-util>micromatch>braces",
+        "jest>jest-cli>@jest/core>jest-config>jest-circus>jest-runtime>@jest/globals>@jest/expect>jest-snapshot>expect>jest-message-util>micromatch>braces"
+      ],
+      "reason": "Real HIGH stack-exhaustion vulnerability, not a scanner false positive. Deeply nested attacker-controlled brace patterns can exhaust Node's call stack. On 2026-10-03 the reviewed advisory lists no patched release and npm's latest official braces release remains 3.0.3. The supported Expo SDK 54 jest-expo tree still uses Jest 29 packages, so a top-level Jest 30 change would be an unreviewed mixed toolchain and would not address the separate Expo/Metro graph path. Accept only this bounded, expiring host-side build/test-tooling exposure pending an official compatible fix.",
+      "reachability_assessment": "The completed Yarn audit reports exactly the ten Jest/@types/jest/jest-expo paths listed above. The complete Yarn graph also contains expo > @expo/metro > metro-file-map@0.83.8 > micromatch@4.0.8 > braces@3.0.3, although the scanner does not emit that path. This is host-side Expo/Metro bundler/file-map tooling, not a Jest-only or dev-dependency-only graph. metro-file-map's sole micromatch call is watchers/common.js includedByGlob(type, globs, dot, relativePath), which calls micromatch.some(relativePath, globs): relativePath is the local filesystem-event match candidate; globs are fixed package/health-check patterns plus extensions from repository/Expo Metro configuration. GlamGenius does not let HTTP requests, customer data or app runtime data set those pattern arguments. micromatch.some uses picomatch and does not call the vulnerable braces parser; an instrumented brace-bearing candidate invoked braces zero times. Expo export disables file-map watch mode. Neither the Android nor web export source-map module list contains braces, micromatch, metro-file-map, jest or jest-expo package code. The declared Render production Docker build excludes frontend/ and node_modules/ and copies a Python-only backend. Jest/test patterns are repository-controlled. production_runtime_reachable=false; production_user_input_reachable=false; build_ci_reachable=true because the packages are installed for CI test/build tooling. A future Metro config/plugin, dev-server input route, or bundle change invalidates this assessment and requires removal/re-review.",
+      "production_runtime_reachable": false,
+      "production_user_input_reachable": false,
+      "build_ci_reachable": true,
+      "compensating_controls": [
+        "Android Expo export source maps list no braces, micromatch, metro-file-map, jest or jest-expo module; shipped JS contains no executable code from those packages.",
+        "Web Expo export source maps list no braces, micromatch, metro-file-map, jest or jest-expo module; shipped JS contains no executable code from those packages.",
+        "The declared Render production Docker context excludes frontend/ and node_modules/; its Python runtime stage copies only backend code, a Python operator and entrypoint.",
+        "Metro's only micromatch call receives repository/Expo-configured globs as patterns and filesystem event paths as candidates; HTTP bundle entryFile does not configure those globs. The call uses micromatch.some/picomatch, not braces parsing.",
+        "CI and Jest execute on host-side build/test processes with repository-controlled patterns; production customer requests are not passed to Jest, Metro or braces.",
+        "The unused @expo/ngrok tunnel dependency was removed. This does not claim to eliminate all LAN or development-server exposure.",
+        "Yarn 1.22.22 and its committed frozen yarn.lock are the sole frontend dependency authority; CI runs the Yarn audit on dependency PRs, main pushes and scheduled checks.",
+        "The exception is scoped to the exact advisory, CVE, package, version, HIGH severity and ten scanner-emitted paths; the validator rejects new paths, changed identity or severity, and enforces review and expiry dates."
+      ],
+      "owner": "@blazebrt",
+      "created_date": "2026-10-03",
+      "review_date": "2026-10-10",
+      "expiry_date": "2026-10-17",
+      "removal_condition": "Remove immediately on the first of: an official braces fix for CVE-2026-93687; a supported Expo/Metro tree removing micromatch/braces; a supported Jest/jest-expo tree removing the test paths; a Metro pattern becoming remotely or user controlled; braces/micromatch package code entering an Android or web customer bundle; production architecture executing Metro; any other reachability assumption changing; or expiry_date. Prefer removal to renewal and never silently extend.",
+      "upstream_tracking": "Re-check https://github.com/advisories/GHSA-vfj7-8cjw-p6xm and official https://www.npmjs.com/package/braces at every review. Both showed braces 3.0.3 as latest affected release with no patched version on 2026-10-03; track a supported Expo SDK 54/Metro or Jest fix without introducing mixed generations or unofficial forks."
     }
   ]
 }
