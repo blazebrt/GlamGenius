@@ -22,7 +22,7 @@
         "GlamGenius application source does not import node-forge, forge or @expo/code-signing-certificates.",
         "No expo-updates dependency and no updates, codeSigningCertificate, codeSigningMetadata or EAS projectId in the resolved Expo config; CI never runs expo start, so the affected signing and verification path is not invoked.",
         "The production server images copy only the Python backend; frontend/ and node_modules/ are excluded by .dockerignore.",
-        "Dependency versions are frozen by the committed yarn.lock and package-lock.json; CI installs with yarn install --frozen-lockfile.",
+        "Frontend dependency versions are frozen by the committed yarn.lock under the declared Yarn 1.22.22 package-manager authority; CI installs with yarn install --frozen-lockfile, and frontend/package-lock.json is intentionally absent and guarded against reintroduction.",
         "CI runs the Yarn audit and this validator on every push to main, in the weekly scheduled run, and on every PR that changes dependencies or the audit gate.",
         "The exception is scoped to exactly this advisory, CVE, package, installed version, HIGH severity and these two dependency paths. CI fails if the advisory, CVE, package, version or severity changes, if it is reported as CRITICAL, or if any other dependency path appears.",
         "Expiry is enforced automatically: the validator fails the build on and after expiry_date and prints a review-due warning from review_date."

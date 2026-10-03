@@ -43,6 +43,26 @@ test("Yarn is the sole committed frontend dependency authority", () => {
   assert.match(fs.readFileSync(path.join(root, ".gitignore"), "utf8"), /^\/frontend\/package-lock\.json$/m);
 });
 
+test("node-forge compensating control describes the shipped Yarn-only authority", () => {
+  const root = path.resolve(__dirname, "..");
+  const frontend = path.join(root, "frontend");
+  const manifest = JSON.parse(fs.readFileSync(path.join(frontend, "package.json"), "utf8"));
+  const nodeForge = shippedExceptionRegistry.exceptions.find(
+    (exception) => exception.advisory_id === "GHSA-86w9-cpqp-85rv",
+  );
+  assert.ok(nodeForge);
+  const authorityControl = nodeForge.compensating_controls.find(
+    (control) => control.includes("CI installs with yarn install --frozen-lockfile"),
+  );
+  assert.equal(
+    authorityControl,
+    "Frontend dependency versions are frozen by the committed yarn.lock under the declared Yarn 1.22.22 package-manager authority; CI installs with yarn install --frozen-lockfile, and frontend/package-lock.json is intentionally absent and guarded against reintroduction.",
+  );
+  assert.match(manifest.packageManager, /^yarn@1\.22\.22\+sha512\./);
+  assert.equal(fs.existsSync(path.join(frontend, "yarn.lock")), true);
+  assert.equal(fs.existsSync(path.join(frontend, "package-lock.json")), false);
+});
+
 function auditAdvisory({
   advisoryId,
   cve,
