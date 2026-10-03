@@ -7,6 +7,7 @@
 # Dependencies
 node_modules/
 /node_modules
+/frontend/package-lock.json
 /.pnp
 .pnp.js
 .yarn/install-state.gz
