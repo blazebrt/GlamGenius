@@ -144,7 +144,7 @@ for path in "${changed_files[@]}"; do
     backend/Dockerfile|Dockerfile|backend/requirements*.txt|docker-compose*.yml|docker-compose*.yaml)
       container=true
       ;;
-    .trivyignore|.trivy-exceptions.yaml|scripts/validate_trivy_exceptions.py|.github/scripts/detect-ci-scope.sh|.github/workflows/ci.yml)
+    .trivyignore|.trivy-exceptions.yaml|scripts/validate_trivy_exceptions.py|scripts/test_validate_trivy_exceptions.py|.github/scripts/detect-ci-scope.sh|.github/workflows/ci.yml)
       container=true
       ;;
     # The production image itself, and the Blueprint that decides which
