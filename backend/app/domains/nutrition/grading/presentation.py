@@ -169,6 +169,28 @@ def _unit_symbol(unit: str) -> str:
     return unit.split(" ", 1)[0] if unit else "g"
 
 
+def _finite_decimal(value: object) -> Decimal | None:
+    """One finite-only authority for grading numbers used in presentation."""
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        number = Decimal(str(value))
+    except (InvalidOperation, TypeError, ValueError):
+        return None
+    return number if number.is_finite() else None
+
+
+def _safe_float(value: object) -> float | None:
+    number = _finite_decimal(value)
+    if number is None:
+        return None
+    try:
+        display = float(number)
+    except OverflowError:
+        return None
+    return display if math.isfinite(display) else None
+
+
 def _quantity(value: Any, unit: str) -> dict[str, Any] | None:
     """A measured amount, with the basis it was measured on stated.
 
@@ -176,10 +198,11 @@ def _quantity(value: Any, unit: str) -> dict[str, Any] | None:
     per 100 ml, and describing that as a packet would be inventing a number
     nobody printed.
     """
-    if value is None:
+    display = _safe_float(value)
+    if display is None:
         return None
     return {
-        "value": float(value),
+        "value": display,
         "unit": _unit_symbol(unit),
         "basis": _basis_for_unit(unit),
     }
@@ -444,14 +467,15 @@ def _other_lowering_factors(
         if entry is None or not entry.effect:
             continue
         promised = product.name_promises
-        declared = product.declared_percentages.get(promised) if promised else None
-        if rule_id.endswith("declared_percentage") and (declared is None or declared >= 50):
+        declared = _finite_decimal(product.declared_percentages.get(promised)) if promised else None
+        if rule_id.endswith("declared_percentage") and (declared is None or declared >= Decimal("50")):
             continue
+        display_declared = _safe_float(declared)
         rows.append(_factor(
             key="naming", label="named_ingredient", status=status,
             explanation=explanation, rule=entry.rule_id, ruleset=ruleset,
-            quantity={"value": float(declared), "unit": "%", "basis": "of_product"}
-            if declared is not None else None,
+            quantity={"value": display_declared, "unit": "%", "basis": "of_product"}
+            if display_declared is not None else None,
             sources=_sources_for(entry),
             detail={"ingredient": promised, "finding": entry.finding},
         ))
@@ -557,14 +581,14 @@ def _additive_component(product: ProductInput, result: GradeResult) -> dict[str,
 def _naming_component(product: ProductInput, result: GradeResult) -> dict[str, Any]:
     entry = next((row for row in result.trace if row.rule_id.startswith("grade.step4.")), None)
     promised = product.name_promises
-    declared = product.declared_percentages.get(promised) if promised else None
+    declared = _finite_decimal(product.declared_percentages.get(promised)) if promised else None
     if promised is None:
         state, band = "not_promised", "green"
     elif declared is None:
         state, band = "not_declared", "yellow"
-    elif declared >= 50:
+    elif declared >= Decimal("50"):
         state, band = "good", "green"
-    elif declared >= 25:
+    elif declared >= Decimal("25"):
         state, band = "note", "yellow"
     else:
         state, band = "low", "red"
@@ -573,7 +597,7 @@ def _naming_component(product: ProductInput, result: GradeResult) -> dict[str, A
         "band": band,
         "state": state,
         "ingredient": promised,
-        "declared_percent": float(declared) if declared is not None else None,
+        "declared_percent": _safe_float(declared),
         "rule": entry.effect if entry else None,
         "finding": entry.finding if entry else None,
         "source": entry.source_name if entry else None,
@@ -644,27 +668,10 @@ def _ingredient_rows(product: ProductInput) -> list[dict[str, Any]]:
     return rows
 
 
-def _safe_nutrition_float(value: object) -> float | None:
-    """Never let a malformed direct input escape through the display payload."""
-    if value is None or isinstance(value, bool):
-        return None
-    try:
-        number = Decimal(str(value))
-    except (InvalidOperation, TypeError, ValueError):
-        return None
-    if not number.is_finite():
-        return None
-    try:
-        display = float(number)
-    except OverflowError:
-        return None
-    return display if math.isfinite(display) else None
-
-
 def _safe_salt_float(product: ProductInput) -> float | None:
     if product.salt_g is not None:
-        return _safe_nutrition_float(product.salt_g)
-    sodium = _safe_nutrition_float(product.sodium_g)
+        return _safe_float(product.salt_g)
+    sodium = _safe_float(product.sodium_g)
     salt = sodium * 2.5 if sodium is not None else None
     return salt if salt is not None and math.isfinite(salt) else None
 
@@ -713,10 +720,10 @@ def present(
             ],
         },
         "nutrition": {
-            "total_sugar_g": _safe_nutrition_float(product.total_sugar_g),
+            "total_sugar_g": _safe_float(product.total_sugar_g),
             "salt_g": _safe_salt_float(product),
-            "total_fat_g": _safe_nutrition_float(product.total_fat_g),
-            "protein_g": _safe_nutrition_float(product.protein_g),
+            "total_fat_g": _safe_float(product.total_fat_g),
+            "protein_g": _safe_float(product.protein_g),
         },
         "components": [
             _processing_component(result),

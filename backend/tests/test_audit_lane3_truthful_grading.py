@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import json
+import math
 import re
 import uuid
 from dataclasses import replace
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 
 import pytest
 from app.domains.b2b import truth as b2b_truth
@@ -151,6 +152,66 @@ def test_direct_nonfinite_product_input_cannot_reach_arithmetic_or_json(unsafe):
     assert graded.result.outcome is GradeOutcome.NOT_ENOUGH_INFORMATION
     assert graded.result.grade is None and graded.result.ceiling is None
     json.dumps(graded.payload, allow_nan=False)
+
+
+def _assert_finite_payload(value):
+    """Check the entire published payload, not only its nutrition envelope."""
+    if isinstance(value, float):
+        assert math.isfinite(value)
+    elif isinstance(value, dict):
+        for child in value.values():
+            _assert_finite_payload(child)
+    elif isinstance(value, (list, tuple)):
+        for child in value:
+            _assert_finite_payload(child)
+    elif isinstance(value, str):
+        assert value not in {"NaN", "Infinity", "+Infinity", "-Infinity"}
+    json.dumps(value, allow_nan=False)
+
+
+@pytest.mark.parametrize("field", ["protein_g", "fibre_g"])
+@pytest.mark.parametrize("unsafe", [Decimal("NaN"), Decimal("Infinity")])
+def test_nonfinite_positive_label_fact_never_escapes_product_truth(field, unsafe):
+    product = replace(_bread(), **{field: unsafe})
+    graded = product_truth.grade(product, _published())
+    assert graded.result.outcome is GradeOutcome.NOT_ENOUGH_INFORMATION
+    assert graded.result.grade is None
+    _assert_finite_payload(graded.payload)
+    positive = next(row for row in graded.payload["positives"] if row["key"] == field.removesuffix("_g"))
+    assert positive["quantity"] is None
+
+
+@pytest.mark.parametrize("unsafe", [Decimal("NaN"), Decimal("Infinity")])
+def test_nonfinite_declared_percentage_never_escapes_product_truth(unsafe):
+    product = _bread(promised="wheat", declared=unsafe)
+    graded = product_truth.grade(product, _published())
+    assert graded.result.outcome is GradeOutcome.NOT_ENOUGH_INFORMATION
+    assert graded.result.grade is None
+    _assert_finite_payload(graded.payload)
+    naming = next(row for row in graded.payload["components"] if row["key"] == "naming")
+    assert naming["declared_percent"] is None
+
+
+def test_finite_declared_percentage_presentation_is_unchanged():
+    graded = product_truth.grade(_bread(promised="wheat", declared=Decimal("10")), _published())
+    assert graded.result.outcome is GradeOutcome.GRADED
+    naming = next(row for row in graded.payload["components"] if row["key"] == "naming")
+    assert (naming["state"], naming["band"], naming["declared_percent"]) == ("low", "red", 10.0)
+    factor = next(row for row in graded.payload["negatives"] if row["key"] == "naming")
+    assert factor["quantity"] == {"value": 10.0, "unit": "%", "basis": "of_product"}
+    _assert_finite_payload(graded.payload)
+
+
+def test_named_factor_path_omits_an_unreadable_percentage():
+    valid = _bread(promised="wheat", declared=Decimal("10"))
+    invalid = _bread(promised="wheat", declared=Decimal("NaN"))
+    # Even if a caller accidentally pairs an old trace with new invalid facts,
+    # presentation must not compare or serialize the unsafe number.
+    payload = presentation.present(invalid, grade_product(valid), _published())
+    _assert_finite_payload(payload)
+    assert not any(row["key"] == "naming" for row in payload["negatives"])
+    naming = next(row for row in payload["components"] if row["key"] == "naming")
+    assert naming["declared_percent"] is None
 
 
 def _bread(*, promised: str | None = None, declared: Decimal | None = None) -> ProductInput:
@@ -302,6 +363,53 @@ def test_mutation_nonfinite_presentation_leak_is_killed(monkeypatch):
     with monkeypatch.context() as patch:
         patch.setattr(presentation, "_safe_salt_float", lambda item: float(item.sodium_g * Decimal("2.5")))
         with pytest.raises(ValueError, match="Out of range float"):
+            oracle()
+
+
+def test_mutation_raw_quantity_float_is_killed(monkeypatch):
+    product = replace(_bread(), protein_g=Decimal("NaN"))
+
+    def oracle():
+        _assert_finite_payload(product_truth.grade(product, _published()).payload)
+
+    oracle()
+    with monkeypatch.context() as patch:
+        patch.setattr(presentation, "_quantity", lambda value, unit: {
+            "value": float(value), "unit": presentation._unit_symbol(unit),
+            "basis": presentation._basis_for_unit(unit),
+        } if value is not None else None)
+        with pytest.raises(AssertionError):
+            oracle()
+
+
+def test_mutation_positive_factor_nonfinite_quantity_is_killed(monkeypatch):
+    product = replace(_bread(), fibre_g=Decimal("Infinity"))
+
+    def oracle():
+        payload = product_truth.grade(product, _published()).payload
+        factor = next(row for row in payload["positives"] if row["key"] == "fibre")
+        assert factor["quantity"] is None
+        _assert_finite_payload(payload)
+
+    oracle()
+    with monkeypatch.context() as patch:
+        patch.setattr(presentation, "_safe_float", lambda value: float(value) if value is not None else None)
+        with pytest.raises(AssertionError):
+            oracle()
+
+
+def test_mutation_raw_named_ingredient_comparison_is_killed(monkeypatch):
+    product = _bread(promised="wheat", declared=Decimal("NaN"))
+
+    def oracle():
+        _assert_finite_payload(product_truth.grade(product, _published()).payload)
+
+    oracle()
+    original = presentation._finite_decimal
+    with monkeypatch.context() as patch:
+        patch.setattr(presentation, "_finite_decimal", lambda value: value if isinstance(value, Decimal)
+                      else original(value))
+        with pytest.raises(InvalidOperation):
             oracle()
 
 
