@@ -169,6 +169,10 @@ async def confirm_skin_care_label(
         "product_category": capture.facts[care_capture.CATEGORY_FACT_KEY],
         "label_snapshot": {
             "id": str(snapshot.id),
+            # Semantic-version deduplication can reuse a snapshot from an
+            # earlier confirmation scan. The client needs this distinct
+            # provenance to verify the exact FOR YOU response pack.
+            "source_scan_id": str(snapshot.scan_event_id),
             "version_number": snapshot.version_number,
             "content_fingerprint": snapshot.content_fingerprint,
             "completeness": snapshot.completeness,

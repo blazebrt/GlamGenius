@@ -561,6 +561,7 @@ class TestConfirmedCapture:
         assert body["barcode"] == BARCODE
         assert body["product_category"] == "skin_care"
         assert body["label_snapshot"]["version_number"] == 1
+        assert body["label_snapshot"]["source_scan_id"] == body["scan_id"]
 
         factory = get_sessionmaker()
         async with factory() as session:
@@ -820,6 +821,10 @@ class TestVersioning:
         again = await _confirm(app_client, captured["headers"], captured["token"], second_run)
         assert again.status_code == 201, again.text
         assert again.json()["label_snapshot"]["version_number"] == 1
+        assert again.json()["scan_id"] != captured["body"]["scan_id"]
+        # Semantic deduplication retains the earlier source scan. It would be
+        # false to compare this value with the newer physical confirmation.
+        assert again.json()["label_snapshot"]["source_scan_id"] == captured["body"]["scan_id"]
 
         factory = get_sessionmaker()
         async with factory() as session:

@@ -99,6 +99,24 @@ type SkinCareDraft = {
   message: string | null;
 };
 
+/** No personalized claim may cross from another physical or semantic pack. */
+function responseBelongsToConfirmedPack(
+  answer: ForYouResponse, confirmed: ConfirmedSkinCareLabel,
+): boolean {
+  const pack = answer.pack;
+  return answer.barcode === confirmed.barcode
+    && pack?.is_proven === true
+    && pack.current_pack_scan_id === confirmed.scan_id
+    && pack.label_snapshot_id === confirmed.label_snapshot.id
+    // The source scan is NOT necessarily the current confirmation scan:
+    // identical label content reuses the earlier immutable snapshot.
+    && typeof confirmed.label_snapshot.source_scan_id === 'string'
+    && confirmed.label_snapshot.source_scan_id.length > 0
+    && pack.label_snapshot_source_scan_id === confirmed.label_snapshot.source_scan_id
+    && pack.label_snapshot_version === confirmed.label_snapshot.version_number
+    && pack.content_fingerprint === confirmed.label_snapshot.content_fingerprint;
+}
+
 export default function ScanProductScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
@@ -130,6 +148,7 @@ export default function ScanProductScreen() {
     && skinConfirmedAccount === userId && currentAuth().accountId === userId
     && result.barcode === skinConfirmed.barcode
     ? [result.barcode, skinConfirmed.scan_id, skinConfirmed.label_snapshot.id,
+      skinConfirmed.label_snapshot.source_scan_id,
       skinConfirmed.label_snapshot.version_number,
       skinConfirmed.label_snapshot.content_fingerprint].join('|')
     : null;
@@ -340,26 +359,27 @@ export default function ScanProductScreen() {
    */
   const loadForYou = useCallback(async (
     barcode: string, context: ForYouSafetyContext, product: string | null,
+    confirmedPack: ConfirmedSkinCareLabel,
   ) => {
     if (!product || currentForYouProduct.current !== product) return;
     const generation = ++forYouGeneration.current;
     const account = userId;
     const auth = currentAuth();
     if (auth.accountId !== account || !isCurrentAuth(auth)) return;
-    const stillCurrent = () => (
+    const stillOwnsDisplayedRequest = () => (
       forYouGeneration.current === generation
       && currentForYouProduct.current === product
       && currentForYouAccount.current === account
-      && isCurrentAuth(auth)
     );
+    const stillCurrent = () => stillOwnsDisplayedRequest() && isCurrentAuth(auth);
     setForYou(null);
     setForYouLoading(true);
     setForYouFailed(false);
     try {
       const answer = await fetchSkinCareForYou(barcode, context);
       if (!stillCurrent()) return;
-      // A server response naming another barcode is never this pack's result.
-      if (answer && answer.barcode !== barcode) {
+      // Barcode equality alone cannot distinguish two physical packs.
+      if (answer && !responseBelongsToConfirmedPack(answer, confirmedPack)) {
         setForYou(null);
         setForYouFailed(true);
         return;
@@ -372,7 +392,18 @@ export default function ScanProductScreen() {
       setForYou(null);
       setForYouFailed(true);
     } finally {
-      if (stillCurrent()) setForYouLoading(false);
+      if (stillOwnsDisplayedRequest()) {
+        const currentAccount = currentAuth().accountId;
+        if (currentAccount === account) {
+          if (!isCurrentAuth(auth)) {
+            // A new session for this same account invalidated the old answer,
+            // but this request still owns the spinner. Retry gets a new ticket.
+            setForYou(null);
+            setForYouFailed(true);
+          }
+          setForYouLoading(false);
+        }
+      }
     }
   }, [userId]);
 
@@ -439,12 +470,12 @@ export default function ScanProductScreen() {
    */
   useFocusEffect(
     useCallback(() => {
-      if (stage !== 'skin-care-confirmed' || !result || !safety || !forYouProduct) return;
-      void loadForYou(result.barcode, safety, forYouProduct);
+      if (stage !== 'skin-care-confirmed' || !result || !skinConfirmed || !safety || !forYouProduct) return;
+      void loadForYou(result.barcode, safety, forYouProduct, skinConfirmed);
       // React Navigation can retain this mounted screen while another route
       // is visible. Its old request loses authority at blur, not at unmount.
       return () => { forYouGeneration.current += 1; };
-    }, [loadForYou, result, safety, stage, forYouProduct]),
+    }, [loadForYou, result, skinConfirmed, safety, stage, forYouProduct]),
   );
 
   // Nothing else may call loadForYou: one owner, one request per answer, and
@@ -610,7 +641,7 @@ export default function ScanProductScreen() {
               response={forYou}
               loading={forYouLoading}
               failed={forYouFailed}
-              onRetry={() => void loadForYou(result.barcode, safety, forYouProduct)}
+              onRetry={() => void loadForYou(result.barcode, safety, forYouProduct, skinConfirmed)}
               onAddSkinDetails={() => router.push('/for-you-profile')}
             />
           ))}
