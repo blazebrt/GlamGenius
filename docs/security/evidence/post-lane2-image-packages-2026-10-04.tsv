@@ -1,0 +1,173 @@
+# Package inventory from exact-main CI #880 Render image, scanned 2026-10-04.
+# Image sha256:5a123d3461d6365972f59d5a1d49589e2119073b9a984647cdb609ccff467c79
+scanner_type	package	package_id
+debian	adduser	adduser@3.152
+debian	apt	apt@3.0.3
+debian	base-files	base-files@13.8+deb13u7
+debian	base-passwd	base-passwd@3.6.7
+debian	bash	bash@5.2.37-2+b10
+debian	bsdutils	bsdutils@1:2.41.5-0+deb13u1
+debian	ca-certificates	ca-certificates@20250419
+debian	coreutils	coreutils@9.7-3
+debian	dash	dash@0.5.12-12
+debian	debconf	debconf@1.5.91
+debian	debian-archive-keyring	debian-archive-keyring@2025.1
+debian	debianutils	debianutils@5.23.2
+debian	diffutils	diffutils@1:3.10-4
+debian	dpkg	dpkg@1.22.22
+debian	findutils	findutils@4.10.0-3
+debian	gcc-14-base	gcc-14-base@14.2.0-19
+debian	grep	grep@3.11-4
+debian	gzip	gzip@1.13-1+deb13u1
+debian	hostname	hostname@3.25
+debian	init-system-helpers	init-system-helpers@1.69~deb13u1
+debian	libacl1	libacl1@2.3.2-2+b1
+debian	libapt-pkg7.0	libapt-pkg7.0@3.0.3
+debian	libattr1	libattr1@1:2.5.2-3
+debian	libaudit-common	libaudit-common@1:4.0.2-2+deb13u1
+debian	libaudit1	libaudit1@1:4.0.2-2+deb13u1
+debian	libblkid1	libblkid1@2.41.5-0+deb13u1
+debian	libbsd0	libbsd0@0.12.2-2
+debian	libbz2-1.0	libbz2-1.0@1.0.8-6
+debian	libc-bin	libc-bin@2.41-12+deb13u4
+debian	libc6	libc6@2.41-12+deb13u4
+debian	libcap-ng0	libcap-ng0@0.8.5-4+b1
+debian	libcap2	libcap2@1:2.75-10+deb13u1+b3
+debian	libcrypt1	libcrypt1@1:4.4.38-1
+debian	libdb5.3t64	libdb5.3t64@5.3.28+dfsg2-9
+debian	libdebconfclient0	libdebconfclient0@0.280
+debian	libffi8	libffi8@3.4.8-2
+debian	libgcc-s1	libgcc-s1@14.2.0-19
+debian	libgdbm6t64	libgdbm6t64@1.24-2
+debian	libgmp10	libgmp10@2:6.3.0+dfsg-3
+debian	libhogweed6t64	libhogweed6t64@3.10.1-1
+debian	liblastlog2-2	liblastlog2-2@2.41.5-0+deb13u1
+debian	liblz4-1	liblz4-1@1.10.0-4
+debian	liblzma5	liblzma5@5.8.1-1+deb13u1
+debian	libmd0	libmd0@1.1.0-2+b1
+debian	libmount1	libmount1@2.41.5-0+deb13u1
+debian	libncursesw6	libncursesw6@6.5+20250216-2
+debian	libnettle8t64	libnettle8t64@3.10.1-1
+debian	libpam-modules	libpam-modules@1.7.0-5
+debian	libpam-modules-bin	libpam-modules-bin@1.7.0-5
+debian	libpam-runtime	libpam-runtime@1.7.0-5
+debian	libpam0g	libpam0g@1.7.0-5
+debian	libpcre2-8-0	libpcre2-8-0@10.46-1~deb13u3
+debian	libreadline8t64	libreadline8t64@8.2-6
+debian	libseccomp2	libseccomp2@2.6.0-2
+debian	libselinux1	libselinux1@3.8.1-1
+debian	libsemanage-common	libsemanage-common@3.8.1-1
+debian	libsemanage2	libsemanage2@3.8.1-1
+debian	libsepol2	libsepol2@3.8.1-1
+debian	libsmartcols1	libsmartcols1@2.41.5-0+deb13u1
+debian	libsqlite3-0	libsqlite3-0@3.46.1-7+deb13u2
+debian	libssl3t64	libssl3t64@3.5.7-1~deb13u3
+debian	libstdc++6	libstdc++6@14.2.0-19
+debian	libsystemd0	libsystemd0@257.13-1~deb13u1
+debian	libtinfo6	libtinfo6@6.5+20250216-2
+debian	libudev1	libudev1@257.13-1~deb13u1
+debian	libuuid1	libuuid1@2.41.5-0+deb13u1
+debian	libxxhash0	libxxhash0@0.8.3-2
+debian	libzstd1	libzstd1@1.5.7+dfsg-1
+debian	login	login@1:4.16.0-2+really2.41.5-0+deb13u1
+debian	login.defs	login.defs@1:4.17.4-2
+debian	mawk	mawk@1.3.4.20250131-1
+debian	mount	mount@2.41.5-0+deb13u1
+debian	ncurses-base	ncurses-base@6.5+20250216-2
+debian	ncurses-bin	ncurses-bin@6.5+20250216-2
+debian	netbase	netbase@6.5
+debian	openssl	openssl@3.5.7-1~deb13u3
+debian	openssl-provider-legacy	openssl-provider-legacy@3.5.7-1~deb13u3
+debian	passwd	passwd@1:4.17.4-2
+debian	perl-base	perl-base@5.40.1-6+deb13u1
+debian	readline-common	readline-common@8.2-6
+debian	sed	sed@4.9-2+deb13u1
+debian	sqv	sqv@1.3.0-3+b2
+debian	sysvinit-utils	sysvinit-utils@3.14-4
+debian	tar	tar@1.35+dfsg-3.1
+debian	tini	tini@0.19.0-3+b8
+debian	tzdata	tzdata@2026c-0+deb13u1
+debian	util-linux	util-linux@2.41.5-0+deb13u1
+debian	zlib1g	zlib1g@1:1.3.dfsg+really1.3.1-1+b1
+python-pkg	aiofiles	
+python-pkg	alembic	
+python-pkg	annotated-doc	
+python-pkg	annotated-types	
+python-pkg	anyio	
+python-pkg	asyncpg	
+python-pkg	autocommand	
+python-pkg	backports.tarfile	
+python-pkg	certifi	
+python-pkg	cffi	
+python-pkg	charset-normalizer	
+python-pkg	click	
+python-pkg	cryptography	
+python-pkg	deprecation	
+python-pkg	distro	
+python-pkg	dnspython	
+python-pkg	email-validator	
+python-pkg	et_xmlfile	
+python-pkg	fastapi	
+python-pkg	google-auth	
+python-pkg	google-genai	
+python-pkg	greenlet	
+python-pkg	h11	
+python-pkg	h2	
+python-pkg	hpack	
+python-pkg	httpcore	
+python-pkg	httpx	
+python-pkg	hyperframe	
+python-pkg	idna	
+python-pkg	importlib_metadata	
+python-pkg	iniconfig	
+python-pkg	jaraco.context	
+python-pkg	jaraco.functools	
+python-pkg	jaraco.text	
+python-pkg	Mako	
+python-pkg	MarkupSafe	
+python-pkg	more-itertools	
+python-pkg	msgpack	
+python-pkg	multidict	
+python-pkg	openpyxl	
+python-pkg	packaging	
+python-pkg	packaging	
+python-pkg	platformdirs	
+python-pkg	pluggy	
+python-pkg	postgrest	
+python-pkg	propcache	
+python-pkg	psycopg2-binary	
+python-pkg	pyasn1	
+python-pkg	pyasn1_modules	
+python-pkg	pycparser	
+python-pkg	pydantic	
+python-pkg	pydantic_core	
+python-pkg	Pygments	
+python-pkg	PyJWT	
+python-pkg	pytest	
+python-pkg	pytest-asyncio	
+python-pkg	python-dotenv	
+python-pkg	python-multipart	
+python-pkg	realtime	
+python-pkg	requests	
+python-pkg	ruff	
+python-pkg	sentry-sdk	
+python-pkg	setuptools	
+python-pkg	sniffio	
+python-pkg	SQLAlchemy	
+python-pkg	starlette	
+python-pkg	storage3	
+python-pkg	StrEnum	
+python-pkg	supabase	
+python-pkg	supabase-auth	
+python-pkg	supabase-functions	
+python-pkg	tenacity	
+python-pkg	tomli	
+python-pkg	typing_extensions	
+python-pkg	typing-inspection	
+python-pkg	urllib3	
+python-pkg	uvicorn	
+python-pkg	websockets	
+python-pkg	wheel	
+python-pkg	wheel	
+python-pkg	yarl	
+python-pkg	zipp	
