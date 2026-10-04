@@ -1181,6 +1181,8 @@ export interface ConfirmedSkinCareLabel {
   product_category: string;
   label_snapshot: {
     id: string;
+    /** Capture that created this semantic version; may differ from scan_id after deduplication. */
+    source_scan_id: string;
     version_number: number;
     content_fingerprint: string;
     completeness: string;

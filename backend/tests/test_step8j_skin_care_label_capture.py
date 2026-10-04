@@ -35,6 +35,7 @@ from app.domains.ai_gateway.models import (
 )
 from app.domains.evidence.models import EvidenceClaim
 from app.domains.family.subject import account_holder_subject
+from app.domains.inventory.models import InventoryItem, InventoryProductLink
 from app.domains.personal_applicability.enums import PersonalApplicabilityCategory
 from app.domains.personal_applicability.service import interpret_label_snapshot_for_account
 from app.domains.personal_decision_explanation.rules import PERSONAL_DECISION_EXPLANATION_RULES
@@ -560,6 +561,7 @@ class TestConfirmedCapture:
         assert body["barcode"] == BARCODE
         assert body["product_category"] == "skin_care"
         assert body["label_snapshot"]["version_number"] == 1
+        assert body["label_snapshot"]["source_scan_id"] == body["scan_id"]
 
         factory = get_sessionmaker()
         async with factory() as session:
@@ -588,6 +590,69 @@ class TestConfirmedCapture:
                 select(AIRunOutput).where(AIRunOutput.ai_run_id == captured["run_id"])
             )).scalar_one()
             assert output.verification_status == VERIFICATION_USER_CONFIRMED
+
+    async def test_confirmed_skin_care_product_result_is_accepted_by_shelf(
+        self, db_clean, off_clean, app_client, registered_supabase_user, payload,
+    ):
+        """One real confirmation crosses Product Result into exact Shelf ownership.
+
+        The evidence label keeps ``skin_care`` and its fingerprint. Only the
+        owned inventory item gets the Shelf's canonical ``beauty`` category.
+        """
+        captured = await _capture(app_client, registered_supabase_user, payload)
+        confirmed = captured["body"]
+        headers = {**captured["headers"], **auth(captured["token"])}
+        product = await app_client.get(
+            f"/api/v2/scan/verdict/{BARCODE}", headers=captured["headers"],
+        )
+        assert product.status_code == 200, product.text
+        result = product.json()
+        assert result["facts_provenance"] == "confirmed_label_snapshot"
+        assert result["label_version"]["id"] == confirmed["label_snapshot"]["id"]
+        assert result["label_version"]["content_fingerprint"] == confirmed["label_snapshot"]["content_fingerprint"]
+        identity = {
+            "barcode": BARCODE,
+            "label_snapshot_id": result["label_version"]["id"],
+            "label_version": result["label_version"]["version_number"],
+            "content_fingerprint": result["label_version"]["content_fingerprint"],
+        }
+        status = await app_client.get(
+            f"/api/v2/inventory/from-scan/{BARCODE}/status", headers=headers,
+            params={key: value for key, value in identity.items() if key != "barcode"},
+        )
+        assert status.status_code == 200, status.text
+        assert status.json()["status"] == "eligible_not_owned"
+        owned = await app_client.post(
+            "/api/v2/inventory/from-scan", headers=headers,
+            json={**identity, "client_mutation_id": "skin-care-to-shelf"},
+        )
+        assert owned.status_code == 200, owned.text
+        assert owned.json()["status"] == "owned"
+        item_id = owned.json()["inventory_item_id"]
+        item = await app_client.get(f"/api/v2/inventory/items/{item_id}", headers=auth(captured["token"]))
+        assert item.status_code == 200, item.text
+        assert item.json()["category"] == "beauty"
+        listed = await app_client.get(
+            "/api/v2/inventory/items", headers=auth(captured["token"]), params={"category": "beauty"},
+        )
+        assert listed.status_code == 200, listed.text
+        assert any(row["id"] == item_id for row in listed.json()["items"])
+
+        async with get_sessionmaker()() as session:
+            snapshot = await session.get(LabelSnapshot, uuid.UUID(identity["label_snapshot_id"]))
+            inventory_item = await session.get(InventoryItem, uuid.UUID(item_id))
+            link = (await session.execute(select(InventoryProductLink).where(
+                InventoryProductLink.inventory_item_id == inventory_item.id,
+            ))).scalar_one()
+        assert snapshot.facts["product_category"] == "skin_care"
+        assert inventory_item.category == "beauty"
+        assert link.label_snapshot_id == snapshot.id
+        assert link.content_fingerprint == snapshot.content_fingerprint
+
+        after = await app_client.get(f"/api/v2/scan/verdict/{BARCODE}", headers=captured["headers"])
+        assert after.status_code == 200, after.text
+        for key in ("grade", "negatives", "positives", "evidence", "label_version"):
+            assert after.json().get(key) == result.get(key)
 
     async def test_the_model_hesitancy_fields_are_never_persisted(
         self, db_clean, app_client, registered_supabase_user,
@@ -756,6 +821,10 @@ class TestVersioning:
         again = await _confirm(app_client, captured["headers"], captured["token"], second_run)
         assert again.status_code == 201, again.text
         assert again.json()["label_snapshot"]["version_number"] == 1
+        assert again.json()["scan_id"] != captured["body"]["scan_id"]
+        # Semantic deduplication retains the earlier source scan. It would be
+        # false to compare this value with the newer physical confirmation.
+        assert again.json()["label_snapshot"]["source_scan_id"] == captured["body"]["scan_id"]
 
         factory = get_sessionmaker()
         async with factory() as session:

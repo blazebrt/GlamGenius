@@ -58,6 +58,7 @@ import { PURCHASE_OS } from '../src/strings/purchaseOs';
 import { transcribeProductLabel, transcribeSkinCareLabel, uploadMedia } from '../src/services/apiV2';
 import { errorMessage } from '../src/services/api';
 import { useUserStore } from '../src/store/userStore';
+import { currentAuth, isCurrentAuth } from '../src/store/authGeneration';
 import { consumeFreshScanRequest } from '../src/services/scanSession';
 
 /** Shown when this barcode's plain scan event cannot be proven to have landed. */
@@ -98,6 +99,24 @@ type SkinCareDraft = {
   message: string | null;
 };
 
+/** No personalized claim may cross from another physical or semantic pack. */
+function responseBelongsToConfirmedPack(
+  answer: ForYouResponse, confirmed: ConfirmedSkinCareLabel,
+): boolean {
+  const pack = answer.pack;
+  return answer.barcode === confirmed.barcode
+    && pack?.is_proven === true
+    && pack.current_pack_scan_id === confirmed.scan_id
+    && pack.label_snapshot_id === confirmed.label_snapshot.id
+    // The source scan is NOT necessarily the current confirmation scan:
+    // identical label content reuses the earlier immutable snapshot.
+    && typeof confirmed.label_snapshot.source_scan_id === 'string'
+    && confirmed.label_snapshot.source_scan_id.length > 0
+    && pack.label_snapshot_source_scan_id === confirmed.label_snapshot.source_scan_id
+    && pack.label_snapshot_version === confirmed.label_snapshot.version_number
+    && pack.content_fingerprint === confirmed.label_snapshot.content_fingerprint;
+}
+
 export default function ScanProductScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
@@ -114,6 +133,7 @@ export default function ScanProductScreen() {
   const [labelKind, setLabelKind] = useState<LabelKind | null>(null);
   const [skinDraft, setSkinDraft] = useState<SkinCareDraft | null>(null);
   const [skinConfirmed, setSkinConfirmed] = useState<ConfirmedSkinCareLabel | null>(null);
+  const [skinConfirmedAccount, setSkinConfirmedAccount] = useState<string | null>(null);
   const [skinFacts, setSkinFacts] = useState<SkinCareLabelFactsView | null>(null);
   // Session-only. Never stored, never logged, never sent to analytics.
   const [safety, setSafety] = useState<ForYouSafetyContext | null>(null);
@@ -123,6 +143,21 @@ export default function ScanProductScreen() {
   const cameraRef = useRef<CameraView | null>(null);
   // One barcode at a time: the camera fires this many times a second.
   const busy = useRef(false);
+  const forYouGeneration = useRef(0);
+  const forYouProduct = stage === 'skin-care-confirmed' && result && skinConfirmed
+    && skinConfirmedAccount === userId && currentAuth().accountId === userId
+    && result.barcode === skinConfirmed.barcode
+    ? [result.barcode, skinConfirmed.scan_id, skinConfirmed.label_snapshot.id,
+      skinConfirmed.label_snapshot.source_scan_id,
+      skinConfirmed.label_snapshot.version_number,
+      skinConfirmed.label_snapshot.content_fingerprint].join('|')
+    : null;
+  // Updated during render as well as on scan reset: a completion between a
+  // product replacement and its focus-effect cleanup cannot claim the new pack.
+  const currentForYouProduct = useRef<string | null>(null);
+  currentForYouProduct.current = forYouProduct;
+  const currentForYouAccount = useRef(userId);
+  currentForYouAccount.current = userId;
 
   useEffect(() => {
     // Register the phone and flush anything held from a previous session.
@@ -141,6 +176,8 @@ export default function ScanProductScreen() {
 
   const handleBarcode = useCallback(async ({ data }: { data: string }) => {
     if (busy.current || !data) return;
+    forYouGeneration.current += 1;
+    currentForYouProduct.current = null;
     busy.current = true;
     setStage('looking');
     try {
@@ -155,6 +192,8 @@ export default function ScanProductScreen() {
   }, []);
 
   const scanAgain = useCallback(() => {
+    forYouGeneration.current += 1;
+    currentForYouProduct.current = null;
     setResult(null);
     setLabelDraft(null);
     setLabelError(null);
@@ -162,9 +201,11 @@ export default function ScanProductScreen() {
     setLabelKind(null);
     setSkinDraft(null);
     setSkinConfirmed(null);
+    setSkinConfirmedAccount(null);
     setSkinFacts(null);
     setSafety(null);
     setForYou(null);
+    setForYouLoading(false);
     setForYouFailed(false);
     setStage('camera');
   }, []);
@@ -316,21 +357,55 @@ export default function ScanProductScreen() {
    * live evidence and the active release, any of which can change between two
    * identical requests.
    */
-  const loadForYou = useCallback(async (barcode: string, context: ForYouSafetyContext) => {
+  const loadForYou = useCallback(async (
+    barcode: string, context: ForYouSafetyContext, product: string | null,
+    confirmedPack: ConfirmedSkinCareLabel,
+  ) => {
+    if (!product || currentForYouProduct.current !== product) return;
+    const generation = ++forYouGeneration.current;
+    const account = userId;
+    const auth = currentAuth();
+    if (auth.accountId !== account || !isCurrentAuth(auth)) return;
+    const stillOwnsDisplayedRequest = () => (
+      forYouGeneration.current === generation
+      && currentForYouProduct.current === product
+      && currentForYouAccount.current === account
+    );
+    const stillCurrent = () => stillOwnsDisplayedRequest() && isCurrentAuth(auth);
+    setForYou(null);
     setForYouLoading(true);
     setForYouFailed(false);
     try {
       const answer = await fetchSkinCareForYou(barcode, context);
+      if (!stillCurrent()) return;
+      // Barcode equality alone cannot distinguish two physical packs.
+      if (answer && !responseBelongsToConfirmedPack(answer, confirmedPack)) {
+        setForYou(null);
+        setForYouFailed(true);
+        return;
+      }
       setForYou(answer);
       setForYouFailed(answer === null);
     } catch {
+      if (!stillCurrent()) return;
       // A technical failure is never a decision.
       setForYou(null);
       setForYouFailed(true);
     } finally {
-      setForYouLoading(false);
+      if (stillOwnsDisplayedRequest()) {
+        const currentAccount = currentAuth().accountId;
+        if (currentAccount === account) {
+          if (!isCurrentAuth(auth)) {
+            // A new session for this same account invalidated the old answer,
+            // but this request still owns the spinner. Retry gets a new ticket.
+            setForYou(null);
+            setForYouFailed(true);
+          }
+          setForYouLoading(false);
+        }
+      }
     }
-  }, []);
+  }, [userId]);
 
   /**
    * Record the answer. It does not fetch.
@@ -367,6 +442,7 @@ export default function ScanProductScreen() {
         return;
       }
       setSkinConfirmed(saved);
+      setSkinConfirmedAccount(userId);
       setSkinFacts(skinDraft.facts);
       setSkinDraft(null);
       setStage('skin-care-confirmed');
@@ -375,7 +451,7 @@ export default function ScanProductScreen() {
     } finally {
       setLabelBusy(false);
     }
-  }, [labelBusy, result, skinDraft]);
+  }, [labelBusy, result, skinDraft, userId]);
 
   // Step 15. "Scan another product" on a Product Result asks for a fresh
   // scanner rather than the last result, once.
@@ -394,9 +470,12 @@ export default function ScanProductScreen() {
    */
   useFocusEffect(
     useCallback(() => {
-      if (stage !== 'skin-care-confirmed' || !result || !safety) return;
-      void loadForYou(result.barcode, safety);
-    }, [loadForYou, result, safety, stage]),
+      if (stage !== 'skin-care-confirmed' || !result || !skinConfirmed || !safety || !forYouProduct) return;
+      void loadForYou(result.barcode, safety, forYouProduct, skinConfirmed);
+      // React Navigation can retain this mounted screen while another route
+      // is visible. Its old request loses authority at blur, not at unmount.
+      return () => { forYouGeneration.current += 1; };
+    }, [loadForYou, result, skinConfirmed, safety, stage, forYouProduct]),
   );
 
   // Nothing else may call loadForYou: one owner, one request per answer, and
@@ -555,17 +634,17 @@ export default function ScanProductScreen() {
             confirmed={skinConfirmed}
             onScanAgain={scanAgain}
           />
-          {!safety ? (
+          {forYouProduct && (!safety ? (
             <SafetyPreflight onSubmit={submitSafety} busy={forYouLoading} />
           ) : (
             <ForYouCard
               response={forYou}
               loading={forYouLoading}
               failed={forYouFailed}
-              onRetry={() => void loadForYou(result.barcode, safety)}
+              onRetry={() => void loadForYou(result.barcode, safety, forYouProduct, skinConfirmed)}
               onAddSkinDetails={() => router.push('/for-you-profile')}
             />
-          )}
+          ))}
         </>
       )}
 
