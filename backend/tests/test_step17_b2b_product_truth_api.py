@@ -919,7 +919,7 @@ async def test_f_an_unpublished_required_rule_withholds_the_whole_answer(app_cli
 
 async def test_f_an_unpublished_optional_rule_that_fired_withholds_the_answer(app_client, db_clean, off_clean, admin,
                                                                              rules, off_network):
-    """The consumer shows such a row labelled candidate; B2B distributes no candidate."""
+    """One fired candidate cannot publish a consumer letter or B2B truth."""
     await seed_world()
     _, raw = await client_with_key(app_client, admin)
     device = await register_device(app_client)
@@ -931,10 +931,55 @@ async def test_f_an_unpublished_optional_rule_that_fired_withholds_the_answer(ap
     spec = rules.current.for_rule(optional).rule_id
     assert not RULES_BY_ID[spec].required
     rules.current = published_ruleset(unpublished=(spec,))
-    still_graded = (await app_client.get(f"/api/v2/scan/verdict/{SKIP}", headers=device)).json()
-    assert still_graded["grade"] is not None, "an optional candidate does not stop the consumer grade"
+    blocked = (await app_client.get(f"/api/v2/scan/verdict/{SKIP}", headers=device)).json()
+    assert (blocked["outcome"], blocked["grade"]) == ("not_enough_information", None)
+    assert blocked["missing"] and spec in blocked["missing"]
     body = await ok(app_client, raw, SKIP)
-    assert (body["state"], body["reason"]) == ("not_enough_information", "evidence_unpublished")
+    assert (body["state"], body["reason"], body["truth"]) == (
+        "not_enough_information", "evidence_unpublished", None,
+    )
+
+
+async def test_f_invalid_confirmed_sodium_cannot_be_graded_around(
+    app_client, db_clean, off_clean, admin, rules, off_network,
+):
+    barcode = gtin("890177000010")
+    facts = label_facts(
+        product_name="Invalid Panel Cereal", ingredients="whole oats, sugar",
+        panel={"energy_kcal": "400", "total_sugar_g": "24", "saturated_fat_g": "2",
+               "sodium_g": "50 mystery-units"},
+    )
+    snapshot = await seed_label(barcode, facts)
+    assert snapshot.facts["nutrition_per_100g"]["sodium_g"] == "50 mystery-units"
+    device = await register_device(app_client)
+    consumer_response = await app_client.get(f"/api/v2/scan/verdict/{barcode}", headers=device)
+    assert consumer_response.status_code == 200, consumer_response.text
+    consumer = consumer_response.json()
+    assert (consumer["outcome"], consumer["grade"]) == ("not_enough_information", None)
+    assert "invalid nutrition values" in consumer["missing"]
+    assert "50 mystery-units" not in consumer_response.text
+    _, raw = await client_with_key(app_client, admin)
+    b2b = await ok(app_client, raw, barcode)
+    assert (b2b["state"], b2b["reason"], b2b["truth"]) == (
+        "not_enough_information", "label_incomplete", None,
+    )
+
+
+async def test_f_invalid_off_sodium_cannot_be_graded_around_on_consumer_route(
+    app_client, db_clean, off_clean, rules, off_network,
+):
+    barcode = gtin("890177000011")
+    await seed_off(barcode, name="Invalid Catalogue Cereal", nutriments={
+        "energy-kcal_100g": 400, "sugars_100g": 24,
+        "saturated-fat_100g": 2, "sodium_100g": "50 mystery-units",
+    })
+    device = await register_device(app_client)
+    response = await app_client.get(f"/api/v2/scan/verdict/{barcode}", headers=device)
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert (body["outcome"], body["grade"]) == ("not_enough_information", None)
+    assert "invalid nutrition values" in body["missing"]
+    assert "50 mystery-units" not in response.text
 
 
 async def test_f_a_published_rule_citing_no_claim_is_not_distributed(app_client, db_clean, off_clean, admin, rules):

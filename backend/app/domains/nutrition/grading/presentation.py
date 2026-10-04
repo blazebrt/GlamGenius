@@ -11,6 +11,8 @@ they read.
 """
 from __future__ import annotations
 
+import math
+from decimal import Decimal, InvalidOperation
 from typing import Any
 
 from app.domains.nutrition.food_reference import ADDITIVES, Additive, Source
@@ -642,6 +644,31 @@ def _ingredient_rows(product: ProductInput) -> list[dict[str, Any]]:
     return rows
 
 
+def _safe_nutrition_float(value: object) -> float | None:
+    """Never let a malformed direct input escape through the display payload."""
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        number = Decimal(str(value))
+    except (InvalidOperation, TypeError, ValueError):
+        return None
+    if not number.is_finite():
+        return None
+    try:
+        display = float(number)
+    except OverflowError:
+        return None
+    return display if math.isfinite(display) else None
+
+
+def _safe_salt_float(product: ProductInput) -> float | None:
+    if product.salt_g is not None:
+        return _safe_nutrition_float(product.salt_g)
+    sodium = _safe_nutrition_float(product.sodium_g)
+    salt = sodium * 2.5 if sodium is not None else None
+    return salt if salt is not None and math.isfinite(salt) else None
+
+
 def present(
     product: ProductInput,
     result: GradeResult,
@@ -686,10 +713,10 @@ def present(
             ],
         },
         "nutrition": {
-            "total_sugar_g": float(product.total_sugar_g) if product.total_sugar_g is not None else None,
-            "salt_g": float(product.salt_equivalent_g) if product.salt_equivalent_g is not None else None,
-            "total_fat_g": float(product.total_fat_g) if product.total_fat_g is not None else None,
-            "protein_g": float(product.protein_g) if product.protein_g is not None else None,
+            "total_sugar_g": _safe_nutrition_float(product.total_sugar_g),
+            "salt_g": _safe_salt_float(product),
+            "total_fat_g": _safe_nutrition_float(product.total_fat_g),
+            "protein_g": _safe_nutrition_float(product.protein_g),
         },
         "components": [
             _processing_component(result),

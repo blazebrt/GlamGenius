@@ -1,0 +1,397 @@
+"""F06/F07: unsafe label numbers and candidate rules never publish a grade."""
+
+from __future__ import annotations
+
+import json
+import re
+import uuid
+from dataclasses import replace
+from decimal import Decimal
+
+import pytest
+from app.domains.b2b import truth as b2b_truth
+from app.domains.nutrition.grading import from_scan, presentation, production_rules
+from app.domains.nutrition.grading.engine import ProductInput, grade_product
+from app.domains.nutrition.grading.production_rules import (
+    STATUS_PUBLISHED,
+    ProductionRuleset,
+    candidate_ruleset,
+)
+from app.domains.nutrition.grading.rules import GradeOutcome
+from app.domains.product import truth as product_truth
+
+
+def _published(*, unpublished: tuple[str, ...] = (), claim_offset: int = 0) -> ProductionRuleset:
+    provenance = {}
+    for index, (rule_id, row) in enumerate(sorted(candidate_ruleset().provenance.items())):
+        provenance[rule_id] = row if rule_id in unpublished else replace(
+            row, status=STATUS_PUBLISHED,
+            claim_ids=(uuid.UUID(int=index + 1 + claim_offset),), claim_version=1,
+        )
+    return ProductionRuleset(provenance=provenance)
+
+
+def _facts(**nutrition: object) -> dict:
+    return {
+        "product_name": "Cereal", "ingredients_text": "whole oats, sugar",
+        "nutrition_basis": "per_100g",
+        "nutrition_per_100g": {
+            "energy_kcal": "400 kcal", "total_sugar_g": "24 g",
+            "saturated_fat_g": "2 g", **nutrition,
+        },
+    }
+
+
+def _off(**nutriments: object) -> dict:
+    return {
+        "ingredients_text": "whole oats, sugar",
+        "nutriments": {
+            "energy-kcal_100g": 400, "sugars_100g": 24,
+            "saturated-fat_100g": 2, **nutriments,
+        },
+    }
+
+
+def _adapt(source: str, value: object, *, field: str = "sodium") -> ProductInput:
+    if source == "confirmed":
+        return from_scan.build_confirmed_label(
+            barcode="8901000000001", facts=_facts(**{f"{field}_g": value}),
+        )
+    return from_scan.build(
+        barcode="8901000000001", name="Cereal",
+        off_half=_off(**{f"{field}_100g": value}),
+    )
+
+
+@pytest.mark.parametrize("source", ["confirmed", "off"])
+@pytest.mark.parametrize("raw,expected", [
+    ("50 mg", Decimal("0.05")),
+    ("0.05 g", Decimal("0.05")),
+    (0.05, Decimal("0.05")),
+    ("0.05", Decimal("0.05")),
+])
+def test_mass_units_are_canonicalised_without_losing_the_declared_unit(source, raw, expected):
+    product = _adapt(source, raw)
+    assert product.sodium_g == expected
+    assert product.invalid_nutrition_fields == ()
+
+
+@pytest.mark.parametrize("source", ["confirmed", "off"])
+@pytest.mark.parametrize("raw", [
+    "50 kcal", "12 bananas", "50 mg garbage", "50 mystery-units",
+    "NaN", "Infinity", "+Infinity", "-Infinity",
+    float("nan"), float("inf"), Decimal("NaN"), Decimal("-Infinity"),
+])
+def test_present_but_invalid_nutrient_fails_closed_through_product_truth(source, raw):
+    product = _adapt(source, raw)
+    assert product.sodium_g is None
+    assert product.invalid_nutrition_fields == ("sodium_g",)
+    assert product.total_sugar_g == Decimal("24")
+    graded = product_truth.grade(product, _published())
+    assert graded.result.outcome is GradeOutcome.NOT_ENOUGH_INFORMATION
+    assert graded.result.grade is None and graded.result.ceiling is None
+    assert "invalid nutrition values" in graded.result.missing
+    assert graded.payload["grade"] is None
+    json.dumps(graded.payload, allow_nan=False)
+    assert graded.payload["nutrition"]["salt_g"] is None
+
+
+@pytest.mark.parametrize("source", ["confirmed", "off"])
+def test_explicit_energy_units_are_canonical_kcal(source):
+    if source == "confirmed":
+        kcal = from_scan.build_confirmed_label(
+            barcode="x", facts=_facts(energy_kcal="100 kcal"),
+        )
+        kj = from_scan.build_confirmed_label(
+            barcode="x", facts=_facts(energy_kcal="418.4 kJ"),
+        )
+    else:
+        kcal = from_scan.build(barcode="x", name="Cereal", off_half=_off(**{
+            "energy-kcal_100g": "100 kcal",
+        }))
+        kj = from_scan.build(barcode="x", name="Cereal", off_half=_off(**{
+            "energy-kj_100g": "418.4 kJ", "energy-kcal_100g": None,
+        }))
+    assert kcal.energy_kcal == kj.energy_kcal == Decimal("100")
+    assert kcal.invalid_nutrition_fields == kj.invalid_nutrition_fields == ()
+
+
+def test_ambiguous_off_energy_is_never_guessed_as_kcal():
+    product = from_scan.build(barcode="x", name="Cereal", off_half=_off(**{
+        "energy-kcal_100g": None, "energy_100g": 4184,
+    }))
+    assert product.energy_kcal is None
+    assert product.invalid_nutrition_fields == ()
+
+
+def test_valid_alias_cannot_hide_an_invalid_provided_alias():
+    product = from_scan.build(barcode="x", name="Cereal", off_half=_off(fiber_100g="4 g", fibre_100g="NaN"))
+    assert product.fibre_g is None
+    assert product.invalid_nutrition_fields == ("fibre_g",)
+    assert product_truth.grade(product, _published()).result.outcome is GradeOutcome.NOT_ENOUGH_INFORMATION
+
+
+def test_valid_kj_cannot_hide_an_invalid_explicit_kcal_value():
+    product = from_scan.build(barcode="x", name="Cereal", off_half=_off(**{
+        "energy-kcal_100g": "12 mystery-units", "energy-kj_100g": "418.4 kJ",
+    }))
+    assert product.energy_kcal is None
+    assert product.invalid_nutrition_fields == ("energy_kcal",)
+    assert product_truth.grade(product, _published()).result.outcome is GradeOutcome.NOT_ENOUGH_INFORMATION
+
+
+@pytest.mark.parametrize("unsafe", [float("nan"), float("inf"), Decimal("NaN"), Decimal("Infinity")])
+def test_direct_nonfinite_product_input_cannot_reach_arithmetic_or_json(unsafe):
+    product = ProductInput(
+        name="Cereal", ingredients=("whole oats", "sugar"),
+        energy_kcal=Decimal("400"), total_sugar_g=Decimal("24"),
+        saturated_fat_g=Decimal("2"), sodium_g=unsafe,
+    )
+    graded = product_truth.grade(product, _published())
+    assert graded.result.outcome is GradeOutcome.NOT_ENOUGH_INFORMATION
+    assert graded.result.grade is None and graded.result.ceiling is None
+    json.dumps(graded.payload, allow_nan=False)
+
+
+def _bread(*, promised: str | None = None, declared: Decimal | None = None) -> ProductInput:
+    return ProductInput(
+        name="Bread", ingredients=("refined wheat flour", "water", "salt"),
+        energy_kcal=Decimal("250"), total_sugar_g=Decimal("2"),
+        saturated_fat_g=Decimal("1"), sodium_g=Decimal("0.2"),
+        name_promises=promised,
+        declared_percentages={promised: declared} if promised and declared is not None else {},
+    )
+
+
+def test_fired_optional_candidate_blocks_but_published_rule_keeps_existing_grade():
+    product = _bread()
+    baseline = product_truth.grade(product, _published())
+    assert baseline.result.outcome is GradeOutcome.GRADED
+    trace = next(row for row in baseline.result.trace if row.rule_id == "grade.step1.refined_grain")
+    assert trace.grade_affecting
+    blocked = product_truth.grade(product, _published(unpublished=("grade.step1.refined_grain",)))
+    assert blocked.result.outcome is GradeOutcome.NOT_ENOUGH_INFORMATION
+    assert blocked.result.grade is None and blocked.result.ceiling is None
+    assert "grade.step1.refined_grain" in blocked.result.missing
+    assert baseline.result.grade == grade_product(product).grade
+
+
+def test_unfired_optional_candidate_does_not_block():
+    result = product_truth.grade(_bread(), _published(unpublished=("grade.step3.red_tier",)))
+    assert result.result.outcome is GradeOutcome.GRADED
+    assert result.result.grade is not None
+
+
+def test_informational_optional_trace_does_not_become_globally_required():
+    product = _bread(promised="wheat")
+    result = product_truth.grade(product, _published(unpublished=("grade.step4.percentage_not_declared",)))
+    assert any(row.rule_id == "grade.step4.percentage_not_declared" for row in result.result.trace)
+    assert result.result.outcome is GradeOutcome.GRADED
+
+
+def test_declared_percentage_blocks_only_when_its_ceiling_actually_applies():
+    rule_id = "grade.step4.declared_percentage"
+    high = product_truth.grade(
+        _bread(promised="wheat", declared=Decimal("60")),
+        _published(unpublished=(rule_id,)),
+    )
+    low = product_truth.grade(
+        _bread(promised="wheat", declared=Decimal("10")),
+        _published(unpublished=(rule_id,)),
+    )
+    assert high.result.outcome is GradeOutcome.GRADED
+    assert low.result.outcome is GradeOutcome.NOT_ENOUGH_INFORMATION
+    assert rule_id in low.result.missing
+
+
+def test_unpublished_required_still_blocks_and_claim_identity_does_not_move_grade():
+    product = _bread()
+    required = product_truth.grade(product, _published(unpublished=("grade.step1.nova",)))
+    assert required.result.outcome is GradeOutcome.NOT_ENOUGH_INFORMATION
+    assert "grade.step1.nova" in required.result.missing
+    assert product_truth.grade(product, _published()).result.grade == product_truth.grade(
+        product, _published(claim_offset=100),
+    ).result.grade
+
+
+# Mutation battery: each mutant is executed in a temporary monkeypatch context.
+# The oracle is first proved against the unmodified implementation, then must
+# raise AssertionError (or a hard failure) with the deliberately bad behavior.
+@pytest.mark.parametrize("name,raw", [
+    ("leading-number", "50 mg garbage"),
+    ("mg-as-g", "50 mg"),
+    ("incompatible-unit", "50 kcal"),
+])
+def test_mutation_prefix_and_unit_stripping_is_killed(monkeypatch, name, raw):
+    def oracle():
+        parsed = from_scan._quantity(raw, kind="mass", default_unit="g")
+        assert parsed.invalid or parsed.value == Decimal("0.05")
+
+    oracle()
+
+    def prefix_mutant(value, *, kind, default_unit):
+        match = re.match(r"\s*(\d+)", str(value))
+        return from_scan._ParsedQuantity(value=Decimal(match.group(1)))
+
+    with monkeypatch.context() as patch:
+        patch.setattr(from_scan, "_quantity", prefix_mutant)
+        with pytest.raises(AssertionError):
+            oracle()
+
+
+def test_mutation_removed_finite_check_is_killed(monkeypatch):
+    def oracle():
+        assert from_scan._quantity("NaN", kind="mass", default_unit="g").invalid
+
+    oracle()
+    with monkeypatch.context() as patch:
+        patch.setattr(from_scan, "_quantity", lambda *_args, **_kwargs: from_scan._ParsedQuantity(
+            value=Decimal("NaN"),
+        ))
+        with pytest.raises(AssertionError):
+            oracle()
+
+
+def test_mutation_present_invalid_as_absent_is_killed(monkeypatch):
+    def oracle():
+        assert product_truth.grade(_adapt("confirmed", "50 mystery-units"), _published()).result.outcome is (
+            GradeOutcome.NOT_ENOUGH_INFORMATION
+        )
+
+    oracle()
+    original = from_scan._read_quantity
+
+    def drop_invalid(*args, **kwargs):
+        parsed = original(*args, **kwargs)
+        return from_scan._ParsedQuantity() if parsed.invalid else parsed
+
+    with monkeypatch.context() as patch:
+        patch.setattr(from_scan, "_read_quantity", drop_invalid)
+        with pytest.raises(AssertionError):
+            oracle()
+
+
+def test_mutation_guess_ambiguous_off_energy_is_killed(monkeypatch):
+    def oracle():
+        product = from_scan.build(barcode="x", name="Cereal", off_half=_off(**{
+            "energy-kcal_100g": None, "energy_100g": 4184,
+        }))
+        assert product.energy_kcal is None
+
+    oracle()
+    original = from_scan._read_quantity
+
+    def guess_energy(values, keys, *, kind, default_units):
+        if kind == "energy" and values.get("energy_100g") is not None:
+            return from_scan._ParsedQuantity(value=Decimal(str(values["energy_100g"])))
+        return original(values, keys, kind=kind, default_units=default_units)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(from_scan, "_read_quantity", guess_energy)
+        with pytest.raises(AssertionError):
+            oracle()
+
+
+def test_mutation_nonfinite_presentation_leak_is_killed(monkeypatch):
+    product = ProductInput(name="Cereal", ingredients=("oats",), sodium_g=Decimal("NaN"))
+
+    def oracle():
+        json.dumps(product_truth.grade(product, _published()).payload, allow_nan=False)
+
+    oracle()
+    with monkeypatch.context() as patch:
+        patch.setattr(presentation, "_safe_salt_float", lambda item: float(item.sodium_g * Decimal("2.5")))
+        with pytest.raises(ValueError, match="Out of range float"):
+            oracle()
+
+
+@pytest.mark.parametrize("name", ["required-only", "fired-optional-passthrough"])
+def test_mutation_unpublished_fired_optional_passthrough_is_killed(monkeypatch, name):
+    product = _bread()
+    ruleset = _published(unpublished=("grade.step1.refined_grain",))
+
+    def oracle():
+        assert product_truth.grade(product, ruleset).result.outcome is GradeOutcome.NOT_ENOUGH_INFORMATION
+
+    oracle()
+    original = production_rules.enforce_published_required_rules
+
+    def required_only(result, active_ruleset):
+        return original(result, active_ruleset) if active_ruleset.unpublished_required else result
+
+    def lost_grade_affecting_flag(item):
+        result = grade_product(item)
+        return replace(result, trace=tuple(
+            replace(entry, grade_affecting=False)
+            if entry.rule_id == "grade.step1.refined_grain" else entry
+            for entry in result.trace
+        ))
+
+    with monkeypatch.context() as patch:
+        if name == "required-only":
+            patch.setattr(product_truth, "enforce_published_required_rules", required_only)
+        else:
+            patch.setattr(product_truth, "grade_product", lost_grade_affecting_flag)
+        with pytest.raises(AssertionError):
+            oracle()
+
+
+def test_mutation_all_optional_globally_required_is_killed(monkeypatch):
+    product = _bread()
+    ruleset = _published(unpublished=("grade.step3.red_tier",))
+
+    def oracle():
+        assert product_truth.grade(product, ruleset).result.outcome is GradeOutcome.GRADED
+
+    oracle()
+
+    def all_optional(result, active_ruleset):
+        return replace(result, outcome=GradeOutcome.NOT_ENOUGH_INFORMATION, grade=None) if (
+            active_ruleset.unpublished
+        ) else result
+
+    with monkeypatch.context() as patch:
+        patch.setattr(product_truth, "enforce_published_required_rules", all_optional)
+        with pytest.raises(AssertionError):
+            oracle()
+
+
+def test_mutation_english_effect_parsing_is_killed():
+    ruleset = _published(unpublished=("grade.step1.refined_grain",))
+    candidate = grade_product(_bread())
+    paraphrased = replace(candidate, trace=tuple(
+        replace(entry, effect="No ceiling.") if entry.rule_id == "grade.step1.refined_grain" else entry
+        for entry in candidate.trace
+    ))
+    assert production_rules.enforce_published_required_rules(paraphrased, ruleset).outcome is (
+        GradeOutcome.NOT_ENOUGH_INFORMATION
+    )
+
+    def prose_mutant(result):
+        fired = any(
+            entry.effect and entry.effect.startswith("Ceiling ") and
+            (row := ruleset.for_rule(entry.rule_id)) is not None and not row.published
+            for entry in result.trace
+        )
+        return GradeOutcome.NOT_ENOUGH_INFORMATION if fired else result.outcome
+
+    with pytest.raises(AssertionError):
+        assert prose_mutant(paraphrased) is GradeOutcome.NOT_ENOUGH_INFORMATION
+
+
+def test_mutation_wrong_b2b_reason_is_killed(monkeypatch):
+    blocked = product_truth.grade(_bread(), _published(unpublished=("grade.step1.refined_grain",)))
+
+    def oracle():
+        assert b2b_truth.project("8901000000001", None, blocked)["reason"] == "evidence_unpublished"
+
+    oracle()
+    original = b2b_truth._not_enough
+
+    def wrong_reason(barcode, reason):
+        return original(barcode, "label_facts_insufficient" if reason == "evidence_unpublished" else reason)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(b2b_truth, "_not_enough", wrong_reason)
+        with pytest.raises(AssertionError):
+            oracle()

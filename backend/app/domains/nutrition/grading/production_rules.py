@@ -63,9 +63,9 @@ STATUS_CANDIDATE = "candidate"
 class GradingRuleSpec:
     """One grading rule, and what it rests on while it is still a candidate.
 
-    ``required`` marks a rule the verdict cannot be issued without. A missing
-    optional rule can be dropped and the remaining answer is still true as far
-    as it goes; a missing required one means we do not know enough to grade.
+    ``required`` marks a rule the verdict cannot be issued without. An
+    optional rule is needed only if it actually fires in a grade-affecting
+    role; informational and unfired optional rules do not block a grade.
     """
 
     rule_id: str
@@ -228,15 +228,23 @@ async def resolve_production_ruleset(session: AsyncSession) -> ProductionRuleset
 def enforce_published_required_rules(
     result: GradeResult, ruleset: ProductionRuleset,
 ) -> GradeResult:
-    """Prevent candidate constants from producing a customer grade.
+    """Withhold a grade affected by any unpublished governed rule.
 
     The deterministic engine remains useful for authoring and review, but a
-    production letter is only truthful when every required lowering rule has
-    completed its evidence lifecycle.  This is intentionally an outcome
-    boundary rather than a presentation hint: a candidate rule must not still
-    decide D/E while merely being labelled ``candidate`` in the response.
+    production letter needs every required rule and every optional rule that
+    actually changed the candidate grade to have completed its lifecycle.
+    Structured trace identity and ``grade_affecting`` decide that; English
+    effect strings never confer publication authority. Candidate D/E is never
+    published with a mere ``candidate`` label in the response.
     """
-    missing_rules = ruleset.unpublished_required
+    fired_unpublished: set[str] = set()
+    for entry in result.trace:
+        if not entry.grade_affecting:
+            continue
+        governed = ruleset.for_rule(entry.rule_id)
+        if governed is not None and not governed.published:
+            fired_unpublished.add(governed.rule_id)
+    missing_rules = tuple(sorted(set(ruleset.unpublished_required).union(fired_unpublished)))
     if result.outcome is not GradeOutcome.GRADED or not missing_rules:
         return result
     return replace(
@@ -246,7 +254,7 @@ def enforce_published_required_rules(
         ceiling=None,
         headline="Not enough published evidence to grade this.",
         detail=(
-            "Required production grading rules are not yet published. "
+            "A grading rule needed for this result is not yet published. "
             "We do not turn candidate reference constants into a customer grade."
         ),
         missing=tuple(sorted(set(result.missing).union(missing_rules))),

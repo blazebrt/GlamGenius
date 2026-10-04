@@ -112,6 +112,9 @@ class ProductInput:
     #: Set when the label carried no nutrition panel at all.
     has_nutrition_panel: bool = True
     has_ingredient_list: bool = True
+    #: Provided source fields that the adapter could not canonicalise. They
+    #: are not treated as absent values by the confidence gate.
+    invalid_nutrition_fields: tuple[str, ...] = ()
 
     @property
     def salt_equivalent_g(self) -> Decimal | None:
@@ -143,6 +146,8 @@ class TraceEntry:
     source: Source | str
     #: What this step did to the grade, if anything.
     effect: str | None = None
+    #: Structured execution fact; publication never parses ``effect`` prose.
+    grade_affecting: bool = False
 
     @property
     def source_name(self) -> str:
@@ -299,6 +304,7 @@ def _step1(product: ProductInput, trace: list[TraceEntry]) -> tuple[int, Grade]:
     trace.append(TraceEntry(
         1, "Processing gate (NOVA)", f"grade.step1.nova_{result.group}",
         f"NOVA group {result.group}. {result.reason}", result.source, effect=effect,
+        grade_affecting=True,
     ))
     return result.group, ceiling
 
@@ -315,6 +321,7 @@ def _refined_grain_cap(product: ProductInput, trace: list[TraceEntry]) -> Grade 
                 f"The main ingredient is {grain}, a refined grain with the bran and germ removed.",
                 REFINED_GRAIN_SOURCE,
                 effect=f"Ceiling {REFINED_GRAIN_CEILING.value}.",
+                grade_affecting=True,
             ))
             return REFINED_GRAIN_CEILING
     return None
@@ -391,6 +398,7 @@ def _step2(
                 + (" More than twice the high threshold." if severe else ""),
                 threshold.source,
                 effect=f"Down {steps} step{'s' if steps > 1 else ''}.",
+                grade_affecting=True,
             ))
         return steps
 
@@ -439,6 +447,7 @@ def _step2(
             finding, sugar_source,
             effect=f"Down {sugar_steps} step{'s' if sugar_steps > 1 else ''}. "
                    "Sugar is charged once, on whichever reading is worse.",
+            grade_affecting=True,
         ))
 
     positives = _positives(product, trace)
@@ -452,6 +461,7 @@ def _step2(
             "Positives cancelled one penalty: " + ", ".join(positives) + ".",
             "GlamGenius product policy",
             effect="Up 1 step, never past the ceiling and never against a severe finding.",
+            grade_affecting=True,
         ))
     return bands, penalty, positives
 
@@ -514,6 +524,7 @@ def _automatic_e(product: ProductInput, trace: list[TraceEntry]) -> str | None:
                 2, "Nutrient bands", "grade.step2.partially_hydrogenated_oil",
                 f"The ingredient list contains {marker} oil.",
                 FSSAI_TRANSFAT, effect="Automatic E.",
+                grade_affecting=True,
             ))
             return f"The ingredient list contains {marker} oil."
     if product.trans_fat_g is not None:
@@ -550,6 +561,7 @@ def _step3(product: ProductInput, trace: list[TraceEntry]) -> tuple[Grade | None
                 3, "Additives", "grade.step3.black_tier",
                 f"{additive.name} is present. {additive.note or ''}".strip(),
                 additive.source, effect="Automatic E.",
+                grade_affecting=True,
             ))
             automatic = f"{additive.name} is present."
         elif additive.tier == TIER_RED:
@@ -558,6 +570,7 @@ def _step3(product: ProductInput, trace: list[TraceEntry]) -> tuple[Grade | None
                 3, "Additives", "grade.step3.red_tier",
                 f"{additive.name} is present. {additive.function}",
                 additive.source, effect=f"Ceiling {RED_TIER_CEILING.value}.",
+                grade_affecting=True,
             ))
 
     if product.marketed_to_children:
@@ -568,6 +581,7 @@ def _step3(product: ProductInput, trace: list[TraceEntry]) -> tuple[Grade | None
                 3, "Additives", "grade.step3.child_marketed_synthetic_colour",
                 f"A synthetic colour ({colours[0]}) in a product sold to children.",
                 FSSAI_ADDITIVES, effect=f"Flagged. Ceiling {CHILD_COLOUR_CEILING.value}.",
+                grade_affecting=True,
             ))
     if ceiling is None and automatic is None:
         trace.append(TraceEntry(
@@ -605,6 +619,7 @@ def _step4(product: ProductInput, trace: list[TraceEntry]) -> Grade | None:
         f"The name promises {promised}; the label declares {declared}%. {rule.verdict}",
         NAMED_INGREDIENT_SOURCE,
         effect=f"Ceiling {rule.ceiling.value}." if rule.ceiling else "No ceiling.",
+        grade_affecting=rule.ceiling is not None,
     ))
     return rule.ceiling
 
@@ -612,6 +627,32 @@ def _step4(product: ProductInput, trace: list[TraceEntry]) -> Grade | None:
 # ---------------------------------------------------------------------------
 # Step 5 — confidence
 # ---------------------------------------------------------------------------
+def _unsafe_numeric_fields(product: ProductInput) -> tuple[str, ...]:
+    """Reject nonfinite direct ProductInput values before any grading maths."""
+    fields = (
+        "energy_kcal", "protein_g", "total_fat_g", "saturated_fat_g", "trans_fat_g",
+        "total_sugar_g", "added_sugar_g", "fibre_g", "sodium_g", "salt_g",
+        "whole_food_pct",
+    )
+    unsafe: list[str] = []
+    for field_name in fields:
+        value = getattr(product, field_name)
+        if value is None:
+            continue
+        try:
+            if isinstance(value, bool) or not Decimal(str(value)).is_finite():
+                unsafe.append(field_name)
+        except (ArithmeticError, TypeError, ValueError):
+            unsafe.append(field_name)
+    for name, value in product.declared_percentages.items():
+        try:
+            if isinstance(value, bool) or not Decimal(str(value)).is_finite():
+                unsafe.append(f"declared percentage: {name}")
+        except (ArithmeticError, TypeError, ValueError):
+            unsafe.append(f"declared percentage: {name}")
+    return tuple(unsafe)
+
+
 def required_grading_data_missing(product: ProductInput) -> tuple[str, ...]:
     """Return the exact label data Step 5 requires before showing a grade.
 
@@ -620,9 +661,16 @@ def required_grading_data_missing(product: ProductInput) -> tuple[str, ...]:
     ``ProductInput`` first, so every source is judged by the same semantics.
     """
     missing: list[str] = []
+    if product.invalid_nutrition_fields or _unsafe_numeric_fields(product):
+        missing.append("invalid nutrition values")
     if not product.has_ingredient_list or not product.ingredients:
         missing.append("ingredient list")
-    if not product.has_nutrition_panel or product.total_sugar_g is None and product.saturated_fat_g is None and product.salt_equivalent_g is None:
+    if not product.has_nutrition_panel or (
+        product.total_sugar_g is None
+        and product.saturated_fat_g is None
+        and product.salt_g is None
+        and product.sodium_g is None
+    ):
         missing.append("nutrition panel")
     if product.has_nutrition_panel and product.basis not in {"solid", "drink"}:
         missing.append("nutrition basis")
@@ -632,9 +680,14 @@ def required_grading_data_missing(product: ProductInput) -> tuple[str, ...]:
 def _step5(product: ProductInput, trace: list[TraceEntry]) -> tuple[str, ...]:
     missing = required_grading_data_missing(product)
     if missing:
+        finding = (
+            "A declared grading value could not be interpreted safely."
+            if "invalid nutrition values" in missing
+            else "The label is missing its " + " and its ".join(missing) + "."
+        )
         trace.append(TraceEntry(
             5, "Confidence", "grade.step5.not_enough_information",
-            "The label is missing its " + " and its ".join(missing) + ".",
+            finding,
             "GlamGenius product policy",
             effect="NOT_ENOUGH_INFORMATION. No grade is shown.",
         ))
@@ -657,6 +710,23 @@ def grade_product(product: ProductInput) -> GradeResult:
     culinary = _step0(product, trace)
     if culinary is not None:
         return culinary
+
+    # Step 5's invalid-data state is checked before Steps 1–4 so no nonfinite
+    # direct input can enter arithmetic or leak through presentation. Ordinary
+    # missing fields retain the established later Step 5 order and behaviour.
+    if product.invalid_nutrition_fields or _unsafe_numeric_fields(product):
+        missing = _step5(product, trace)
+        return GradeResult(
+            engine_version=FOOD_GRADE_ENGINE_VERSION,
+            outcome=GradeOutcome.NOT_ENOUGH_INFORMATION,
+            grade=None,
+            headline="Not enough information to grade this.",
+            detail="A declared grading value could not be interpreted safely. We do not guess a grade.",
+            nova_group=None,
+            ceiling=None,
+            trace=tuple(trace),
+            missing=missing,
+        )
 
     nova_group, ceiling = _step1(product, trace)
     refined = _refined_grain_cap(product, trace)
@@ -721,6 +791,7 @@ def _severe_added_sugar(product: ProductInput, trace: list[TraceEntry]) -> str |
         f"{food if food is not None else 0}% whole food.",
         FSSAI_SUGAR_ENERGY_SOURCE,
         effect="Automatic E.",
+        grade_affecting=True,
     ))
     return (f"Added sugar supplies about {share:.0f}% of the energy in this product, "
             "and there is almost no food in it.")
