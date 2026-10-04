@@ -1,0 +1,47 @@
+# Exact-main CI #880 Render image; Trivy v0.73.0 DB 2026-10-04T01:47:20Z; no ignore file.
+# Image sha256:5a123d3461d6365972f59d5a1d49589e2119073b9a984647cdb609ccff467c79
+CVE	binary_package	source_package	installed_version	fixed_version	status	severity
+CVE-2025-69720	libncursesw6	ncurses	6.5+20250216-2		affected	HIGH
+CVE-2025-69720	libtinfo6	ncurses	6.5+20250216-2		affected	HIGH
+CVE-2025-69720	ncurses-base	ncurses	6.5+20250216-2		affected	HIGH
+CVE-2025-69720	ncurses-bin	ncurses	6.5+20250216-2		affected	HIGH
+CVE-2026-16742	libsystemd0	systemd	257.13-1~deb13u1		affected	HIGH
+CVE-2026-16742	libudev1	systemd	257.13-1~deb13u1		affected	HIGH
+CVE-2026-54369	libacl1	acl	2.3.2-2+b1		affected	HIGH
+CVE-2026-76642	bsdutils	util-linux	1:2.41.5-0+deb13u1		affected	HIGH
+CVE-2026-76642	libblkid1	util-linux	2.41.5-0+deb13u1		affected	HIGH
+CVE-2026-76642	liblastlog2-2	util-linux	2.41.5-0+deb13u1		affected	HIGH
+CVE-2026-76642	libmount1	util-linux	2.41.5-0+deb13u1		affected	HIGH
+CVE-2026-76642	libsmartcols1	util-linux	2.41.5-0+deb13u1		affected	HIGH
+CVE-2026-76642	libuuid1	util-linux	2.41.5-0+deb13u1		affected	HIGH
+CVE-2026-76642	login	util-linux	1:4.16.0-2+really2.41.5-0+deb13u1		affected	HIGH
+CVE-2026-76642	mount	util-linux	2.41.5-0+deb13u1		affected	HIGH
+CVE-2026-76642	util-linux	util-linux	2.41.5-0+deb13u1		affected	HIGH
+CVE-2026-78408	bsdutils	util-linux	1:2.41.5-0+deb13u1		affected	HIGH
+CVE-2026-78408	libblkid1	util-linux	2.41.5-0+deb13u1		affected	HIGH
+CVE-2026-78408	liblastlog2-2	util-linux	2.41.5-0+deb13u1		affected	HIGH
+CVE-2026-78408	libmount1	util-linux	2.41.5-0+deb13u1		affected	HIGH
+CVE-2026-78408	libsmartcols1	util-linux	2.41.5-0+deb13u1		affected	HIGH
+CVE-2026-78408	libuuid1	util-linux	2.41.5-0+deb13u1		affected	HIGH
+CVE-2026-78408	login	util-linux	1:4.16.0-2+really2.41.5-0+deb13u1		affected	HIGH
+CVE-2026-78408	mount	util-linux	2.41.5-0+deb13u1		affected	HIGH
+CVE-2026-78408	util-linux	util-linux	2.41.5-0+deb13u1		affected	HIGH
+CVE-2026-78409	bsdutils	util-linux	1:2.41.5-0+deb13u1		affected	HIGH
+CVE-2026-78409	libblkid1	util-linux	2.41.5-0+deb13u1		affected	HIGH
+CVE-2026-78409	liblastlog2-2	util-linux	2.41.5-0+deb13u1		affected	HIGH
+CVE-2026-78409	libmount1	util-linux	2.41.5-0+deb13u1		affected	HIGH
+CVE-2026-78409	libsmartcols1	util-linux	2.41.5-0+deb13u1		affected	HIGH
+CVE-2026-78409	libuuid1	util-linux	2.41.5-0+deb13u1		affected	HIGH
+CVE-2026-78409	login	util-linux	1:4.16.0-2+really2.41.5-0+deb13u1		affected	HIGH
+CVE-2026-78409	mount	util-linux	2.41.5-0+deb13u1		affected	HIGH
+CVE-2026-78409	util-linux	util-linux	2.41.5-0+deb13u1		affected	HIGH
+CVE-2026-78410	bsdutils	util-linux	1:2.41.5-0+deb13u1		affected	HIGH
+CVE-2026-78410	libblkid1	util-linux	2.41.5-0+deb13u1		affected	HIGH
+CVE-2026-78410	liblastlog2-2	util-linux	2.41.5-0+deb13u1		affected	HIGH
+CVE-2026-78410	libmount1	util-linux	2.41.5-0+deb13u1		affected	HIGH
+CVE-2026-78410	libsmartcols1	util-linux	2.41.5-0+deb13u1		affected	HIGH
+CVE-2026-78410	libuuid1	util-linux	2.41.5-0+deb13u1		affected	HIGH
+CVE-2026-78410	login	util-linux	1:4.16.0-2+really2.41.5-0+deb13u1		affected	HIGH
+CVE-2026-78410	mount	util-linux	2.41.5-0+deb13u1		affected	HIGH
+CVE-2026-78410	util-linux	util-linux	2.41.5-0+deb13u1		affected	HIGH
+CVE-2026-9538	perl-base	perl	5.40.1-6+deb13u1		fix_deferred	HIGH

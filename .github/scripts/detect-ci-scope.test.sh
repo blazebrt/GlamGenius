@@ -56,6 +56,7 @@ expect_scope "backend/Dockerfile" container true
 expect_scope ".trivy-exceptions.yaml" container true
 expect_scope ".trivyignore" container true
 expect_scope "scripts/validate_trivy_exceptions.py" container true
+expect_scope "scripts/test_validate_trivy_exceptions.py" container true
 expect_scope ".github/scripts/detect-ci-scope.sh" container true
 expect_scope ".github/workflows/ci.yml" container true
 
