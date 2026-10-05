@@ -15,6 +15,8 @@ import {
   FactorSection, ReportSheet, VerdictActions, VerdictLines,
 } from '../components/verdict/VerdictPieces';
 import { S, t } from '../strings/verdict';
+import { toVerdictSource } from '../services/verdictClient';
+import type { ProductVerdictWire } from '../services/apiV2';
 import {
   buildVerdict, everydayNumber, rupees, type VerdictSource,
 } from '../services/verdictModel';
@@ -337,6 +339,38 @@ describe('report an error', () => {
 // Why, and the ingredient list
 // ---------------------------------------------------------------------------
 describe('the why screen', () => {
+  it('renders skipped grading gates as unknown without inventing a rule or source', () => {
+    const keys = ['processing', 'nutrients', 'additives', 'naming'] as const;
+    const wire: ProductVerdictWire = {
+      engine_version: 'test', outcome: 'not_enough_information', grade: null, band: 'yellow',
+      product_name: 'Cocoa Crunch', taxonomy: { domain: 'food', category: 'food', subcategory: 'food' },
+      decision: { action: null, reason_key: 'not_enough_information' },
+      nutrition: { total_sugar_g: 24, salt_g: null, total_fat_g: null, protein_g: null },
+      components: keys.map((key) => ({
+        key, state: 'not_enough_information', band: 'yellow',
+        rule: null, finding: null, source: null, source_url: null, sources: [],
+      })),
+      ingredients: [], quantity_guidance: null, purity_note: null, missing: ['invalid nutrition values'],
+      confidence: { level: 'not_enough_information', text: 'Not enough information' },
+      attribution: null, pack_size_g: null, basis: 'solid',
+    };
+    const components = toVerdictSource(wire).components;
+    expect(components).toHaveLength(4);
+    for (const component of components) {
+      expect(component.plain).toBe(S.factors.not_enough_information);
+      expect(component.band).toBe('yellow');
+      expect(component.term).toBeUndefined();
+      expect(component.rule).toBe('');
+      expect(component.source).toBe('');
+    }
+    render(<ComponentRow component={components[0]} expanded onToggle={jest.fn()} />);
+    expect(screen.getByText(S.factors.not_enough_information)).toBeTruthy();
+    expect(screen.queryByText(S.why.ruleLead)).toBeNull();
+    expect(screen.queryByText(S.why.sourceLead)).toBeNull();
+    expect(screen.queryByText(S.why.nutrients.nothingHigh)).toBeNull();
+    expect(screen.queryByText(S.why.additives.none)).toBeNull();
+  });
+
   it('shows four components, each with a colour dot and a plain sentence', () => {
     for (const component of base.components) {
       render(<ComponentRow component={component} expanded={false} onToggle={jest.fn()} />);

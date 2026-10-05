@@ -1618,7 +1618,7 @@
      "state": "nova1"
     },
     {
-     "band": "green",
+     "band": "yellow",
      "exempt": [],
      "finding": null,
      "high": [],
@@ -1627,7 +1627,7 @@
      "source": null,
      "source_url": null,
      "sources": [],
-     "state": "clear"
+     "state": "not_enough_information"
     },
     {
      "band": "green",

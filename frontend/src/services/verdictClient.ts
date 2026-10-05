@@ -29,6 +29,9 @@ const NOVA_PLAIN: Record<string, string> = {
 
 /** Pick the plain sentence for one component from its key and state. */
 function plainFor(component: ProductVerdictWire['components'][number]): string {
+  // The server can stop before any grading gate runs. Do not turn that
+  // explicit unknown into a reassuring nutrient/additive/naming fallback.
+  if (component.state === 'not_enough_information') return S.factors.not_enough_information;
   switch (component.key) {
     case 'processing':
       return NOVA_PLAIN[component.state] ?? S.why.processing.plain;
@@ -110,7 +113,7 @@ export function toVerdictSource(
     source: row.source ?? '',
     sourceUrl: row.source_url ?? null,
     sources: row.sources ?? [],
-    term: TERMS[row.key],
+    term: row.state === 'not_enough_information' ? undefined : TERMS[row.key],
   }));
 
   const ingredients: VerdictIngredient[] = wire.ingredients.map((row) => ({

@@ -177,8 +177,12 @@ def test_nonfinite_positive_label_fact_never_escapes_product_truth(field, unsafe
     assert graded.result.outcome is GradeOutcome.NOT_ENOUGH_INFORMATION
     assert graded.result.grade is None
     _assert_finite_payload(graded.payload)
-    positive = next(row for row in graded.payload["positives"] if row["key"] == field.removesuffix("_g"))
+    assert not any(row["key"] == field.removesuffix("_g") for row in graded.payload["positives"])
+    # Defensive presentation of mismatched caller data must also stay finite.
+    presented = presentation.present(product, grade_product(_bread()), _published())
+    positive = next(row for row in presented["positives"] if row["key"] == field.removesuffix("_g"))
     assert positive["quantity"] is None
+    _assert_finite_payload(presented)
 
 
 @pytest.mark.parametrize("unsafe", [Decimal("NaN"), Decimal("Infinity")])
@@ -222,6 +226,163 @@ def _bread(*, promised: str | None = None, declared: Decimal | None = None) -> P
         name_promises=promised,
         declared_percentages={promised: declared} if promised and declared is not None else {},
     )
+
+
+def _skipped_gates_product() -> ProductInput:
+    return ProductInput(
+        name="Cocoa Crunch", ingredients=(
+            "maltodextrin", "Potassium bromate", "cocoa 10%", "sugar",
+        ),
+        energy_kcal=Decimal("400"), total_sugar_g=Decimal("24"),
+        saturated_fat_g=Decimal("2"), sodium_g=Decimal("NaN"),
+        name_promises="cocoa", declared_percentages={"cocoa": Decimal("10")},
+    )
+
+
+def _assert_skipped_components(payload: dict) -> None:
+    assert (payload["outcome"], payload["grade"]) == ("not_enough_information", None)
+    components = {row["key"]: row for row in payload["components"]}
+    assert set(components) == set(presentation.COMPONENT_KEYS)
+    for row in components.values():
+        assert (row["state"], row["band"]) == ("not_enough_information", "yellow")
+        assert (row["rule"], row["finding"], row["source"], row["source_url"], row["sources"]) == (
+            None, None, None, None, [],
+        )
+    assert (components["nutrients"]["high"], components["nutrients"]["exempt"]) == ([], [])
+    assert (components["naming"]["ingredient"], components["naming"]["declared_percent"]) == (
+        None, None,
+    )
+
+
+def test_early_invalid_numeric_data_does_not_present_unevaluated_gates_as_safe():
+    product = _skipped_gates_product()
+    # The ingredients are consequential if those gates run, but invalid
+    # nutrition makes the engine return before evaluating any of them.
+    valid = replace(product, sodium_g=Decimal("0.2"))
+    evaluated = grade_product(valid)
+    assert evaluated.nova_group == 4
+    assert any(entry.rule_id == "grade.step3.black_tier" for entry in evaluated.trace)
+    assert any(entry.rule_id == "grade.step4.declared_percentage" for entry in evaluated.trace)
+
+    graded = product_truth.grade(product, _published())
+    assert graded.result.outcome is GradeOutcome.NOT_ENOUGH_INFORMATION
+    assert {entry.step for entry in graded.result.trace} == {0, 5}
+    _assert_skipped_components(graded.payload)
+    _assert_finite_payload(graded.payload)
+
+
+def test_late_step5_missing_data_keeps_the_gates_that_actually_ran():
+    product = replace(_bread(), has_nutrition_panel=False)
+    graded = product_truth.grade(product, _published())
+    assert graded.result.outcome is GradeOutcome.NOT_ENOUGH_INFORMATION
+    assert "nutrition panel" in graded.result.missing
+    assert {1, 3, 4, 5}.issubset({entry.step for entry in graded.result.trace})
+    assert graded.result.bands
+    assert [(row["key"], row["state"], row["band"]) for row in graded.payload["components"]] == [
+        ("processing", "nova3", "yellow"),
+        ("nutrients", "clear", "green"),
+        ("additives", "none", "green"),
+        ("naming", "not_promised", "green"),
+    ]
+
+
+def _unknown_basis_product(**changes: object) -> ProductInput:
+    return replace(_bread(), basis="unknown", **changes)
+
+
+def _assert_unknown_nutrients_with_step2_trace(product: ProductInput) -> dict:
+    graded = product_truth.grade(product, _published())
+    assert graded.result.outcome is GradeOutcome.NOT_ENOUGH_INFORMATION
+    assert "nutrition basis" in graded.result.missing
+    assert graded.result.bands == ()
+    assert any(entry.step == 2 for entry in graded.result.trace)
+    nutrients = next(row for row in graded.payload["components"] if row["key"] == "nutrients")
+    assert (nutrients["state"], nutrients["band"]) == ("not_enough_information", "yellow")
+    assert (nutrients["high"], nutrients["exempt"]) == ([], [])
+    assert not any(
+        row["key"] in {"protein", "fibre"} for row in graded.payload["positives"]
+    )
+    assert not any(
+        row["quantity"] and row["quantity"]["basis"] in {"per_100_g", "per_100_ml"}
+        for row in (*graded.payload["positives"], *graded.payload["negatives"])
+    )
+    return graded.payload
+
+
+def test_unknown_basis_positive_trace_cannot_certify_nutrient_bands():
+    product = _unknown_basis_product(protein_g=Decimal("12"), fibre_g=Decimal("8"))
+    payload = _assert_unknown_nutrients_with_step2_trace(product)
+    assert any(row["rule_id"] == "grade.step2.positives" for row in payload["trace"])
+
+
+def test_unknown_basis_pho_trace_keeps_factual_negative_but_not_clear_nutrients():
+    product = _unknown_basis_product(
+        ingredients=("refined wheat flour", "partially hydrogenated oil", "salt"),
+        trans_fat_g=Decimal("1"),
+    )
+    payload = _assert_unknown_nutrients_with_step2_trace(product)
+    assert any(row["rule_id"] == "grade.step2.partially_hydrogenated_oil"
+               for row in payload["trace"])
+    pho = next(row for row in payload["negatives"] if row["key"] == "trans_fat")
+    assert pho["rule"] == "grade.step2.partially_hydrogenated_oil"
+    assert pho["quantity"] is None
+
+
+def test_unknown_basis_trans_fat_denominator_trace_does_not_certify_nutrients():
+    product = _unknown_basis_product(trans_fat_g=Decimal("1"))
+    payload = _assert_unknown_nutrients_with_step2_trace(product)
+    assert any(row["rule_id"] == "grade.step2.trans_fat_denominator_missing"
+               for row in payload["trace"])
+
+
+@pytest.mark.parametrize("basis,expected_basis", [
+    ("solid", "per_100_g"), ("drink", "per_100_ml"),
+])
+def test_known_basis_without_high_bands_still_shows_clear_nutrients(basis, expected_basis):
+    product = replace(_bread(), basis=basis, protein_g=Decimal("12"))
+    graded = product_truth.grade(product, _published())
+    assert graded.result.bands
+    nutrients = next(row for row in graded.payload["components"] if row["key"] == "nutrients")
+    assert (nutrients["state"], nutrients["band"]) == ("clear", "green")
+    protein = next(row for row in graded.payload["positives"] if row["key"] == "protein")
+    assert protein["quantity"]["basis"] == expected_basis
+
+
+def test_culinary_not_graded_presentation_contract_remains_unchanged():
+    product = ProductInput(name="Ghee", ingredients=("ghee",), protein_g=Decimal("1"))
+    graded = product_truth.grade(product, _published())
+    assert graded.result.outcome is GradeOutcome.NOT_GRADED
+    assert graded.result.bands == ()
+    assert [(row["key"], row["state"]) for row in graded.payload["components"]] == [
+        ("processing", "nova2"), ("nutrients", "clear"),
+        ("additives", "none"), ("naming", "not_promised"),
+    ]
+    assert next(row for row in graded.payload["positives"] if row["key"] == "protein")[
+        "quantity"
+    ]["basis"] == "per_100_g"
+
+
+def test_f07_publication_block_preserves_evaluated_component_facts():
+    product = _bread()
+    published = product_truth.grade(product, _published())
+    blocked = product_truth.grade(product, _published(unpublished=("grade.step1.refined_grain",)))
+    assert (published.result.outcome, blocked.result.outcome) == (
+        GradeOutcome.GRADED, GradeOutcome.NOT_ENOUGH_INFORMATION,
+    )
+    assert blocked.result.grade is None
+    assert blocked.payload["components"] == published.payload["components"]
+    assert all(row["state"] != "not_enough_information" for row in blocked.payload["components"])
+
+
+def test_valid_graded_component_payload_retains_its_existing_states():
+    graded = product_truth.grade(_bread(), _published())
+    assert graded.result.outcome is GradeOutcome.GRADED
+    assert [(row["key"], row["state"], row["band"]) for row in graded.payload["components"]] == [
+        ("processing", "nova3", "yellow"),
+        ("nutrients", "clear", "green"),
+        ("additives", "none", "green"),
+        ("naming", "not_promised", "green"),
+    ]
 
 
 def test_fired_optional_candidate_blocks_but_published_rule_keeps_existing_grade():
@@ -368,9 +529,10 @@ def test_mutation_nonfinite_presentation_leak_is_killed(monkeypatch):
 
 def test_mutation_raw_quantity_float_is_killed(monkeypatch):
     product = replace(_bread(), protein_g=Decimal("NaN"))
+    evaluated = grade_product(_bread())
 
     def oracle():
-        _assert_finite_payload(product_truth.grade(product, _published()).payload)
+        _assert_finite_payload(presentation.present(product, evaluated, _published()))
 
     oracle()
     with monkeypatch.context() as patch:
@@ -384,9 +546,10 @@ def test_mutation_raw_quantity_float_is_killed(monkeypatch):
 
 def test_mutation_positive_factor_nonfinite_quantity_is_killed(monkeypatch):
     product = replace(_bread(), fibre_g=Decimal("Infinity"))
+    evaluated = grade_product(_bread())
 
     def oracle():
-        payload = product_truth.grade(product, _published()).payload
+        payload = presentation.present(product, evaluated, _published())
         factor = next(row for row in payload["positives"] if row["key"] == "fibre")
         assert factor["quantity"] is None
         _assert_finite_payload(payload)
@@ -400,9 +563,10 @@ def test_mutation_positive_factor_nonfinite_quantity_is_killed(monkeypatch):
 
 def test_mutation_raw_named_ingredient_comparison_is_killed(monkeypatch):
     product = _bread(promised="wheat", declared=Decimal("NaN"))
+    evaluated = grade_product(_bread(promised="wheat", declared=Decimal("10")))
 
     def oracle():
-        _assert_finite_payload(product_truth.grade(product, _published()).payload)
+        _assert_finite_payload(presentation.present(product, evaluated, _published()))
 
     oracle()
     original = presentation._finite_decimal
@@ -501,5 +665,75 @@ def test_mutation_wrong_b2b_reason_is_killed(monkeypatch):
 
     with monkeypatch.context() as patch:
         patch.setattr(b2b_truth, "_not_enough", wrong_reason)
+        with pytest.raises(AssertionError):
+            oracle()
+
+
+@pytest.mark.parametrize("step", [
+    pytest.param(1, id="processing-nova1-fallback"),
+    pytest.param(2, id="nutrient-clear-fallback"),
+    pytest.param(3, id="additive-none-fallback"),
+])
+def test_mutation_skipped_gate_safe_fallback_is_killed(monkeypatch, step):
+    product = _skipped_gates_product()
+    ruleset = _published()
+
+    def oracle():
+        _assert_skipped_components(product_truth.grade(product, ruleset).payload)
+
+    oracle()
+    original = presentation._gate_was_evaluated
+    with monkeypatch.context() as patch:
+        patch.setattr(
+            presentation, "_gate_was_evaluated",
+            lambda result, candidate: candidate == step or original(result, candidate),
+        )
+        if step == 1:
+            # The historical fallback converted nova_group=None into NOVA 1.
+            patch.setattr(presentation, "_processing_component", lambda _result: {
+                "key": "processing", "band": "green", "state": "nova1",
+                "rule": None, "finding": None, "source": None,
+                "source_url": None, "sources": [],
+            })
+        with pytest.raises(AssertionError):
+            oracle()
+
+
+def test_mutation_blanket_unknown_for_every_ungraded_result_is_killed(monkeypatch):
+    product = _bread()
+    ruleset = _published(unpublished=("grade.step1.refined_grain",))
+
+    def oracle():
+        graded = product_truth.grade(product, ruleset)
+        assert graded.result.outcome is GradeOutcome.NOT_ENOUGH_INFORMATION
+        assert all(row["state"] != "not_enough_information" for row in graded.payload["components"])
+
+    oracle()
+    original = presentation._gate_was_evaluated
+    with monkeypatch.context() as patch:
+        patch.setattr(
+            presentation, "_gate_was_evaluated",
+            lambda result, step: False if result.outcome is GradeOutcome.NOT_ENOUGH_INFORMATION
+            else original(result, step),
+        )
+        with pytest.raises(AssertionError):
+            oracle()
+
+
+def test_mutation_any_step2_trace_misread_as_nutrient_evaluation_is_killed(monkeypatch):
+    product = _unknown_basis_product(protein_g=Decimal("12"), fibre_g=Decimal("8"))
+    ruleset = _published()
+
+    def oracle():
+        _assert_unknown_nutrients_with_step2_trace(product)
+
+    oracle()
+    original = presentation._gate_was_evaluated
+    with monkeypatch.context() as patch:
+        patch.setattr(
+            presentation, "_gate_was_evaluated",
+            lambda result, step: any(entry.step == 2 for entry in result.trace)
+            if step == 2 else original(result, step),
+        )
         with pytest.raises(AssertionError):
             oracle()

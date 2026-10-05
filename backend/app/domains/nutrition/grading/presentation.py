@@ -440,12 +440,17 @@ def _other_lowering_factors(
 
     entry = traced.get("grade.step2.partially_hydrogenated_oil")
     if entry is not None:
+        # The ingredient finding stands on its own. A declared trans-fat
+        # amount, however, has no per-100 unit until the panel basis is known.
+        trans_fat_unit = {
+            "solid": "g per 100 g", "drink": "g per 100 ml",
+        }.get(product.basis)
         rows.append(_factor(
             key="trans_fat", label="trans_fat", status=STATUS_NOT_PERMITTED,
             explanation="partially_hydrogenated_oil", rule=entry.rule_id,
             ruleset=ruleset,
-            quantity=_quantity(product.trans_fat_g, "g per 100 g")
-            if product.trans_fat_g is not None else None,
+            quantity=_quantity(product.trans_fat_g, trans_fat_unit)
+            if product.trans_fat_g is not None and trans_fat_unit else None,
             sources=_sources_for(entry), detail={"finding": entry.finding},
         ))
 
@@ -495,20 +500,25 @@ def _factor_rows(
     ]
     lowers.sort(key=lambda row: (row["order"], row["key"]))
 
-    # Preserve label facts as facts; none is turned into a dietary recommendation.
+    # A per-100 positive is only a label fact when its panel basis is known.
+    # Nutrient bands prove that Step 2 evaluated it; culinary NOT_GRADED keeps
+    # its established label-fact presentation without invoking Step 2.
     helps: list[dict[str, Any]] = []
-    for key, label, value in (
-        ("protein", "protein", product.protein_g),
-        ("fibre", "fibre", product.fibre_g),
+    if product.basis in {"solid", "drink"} and (
+        result.bands or result.outcome is GradeOutcome.NOT_GRADED
     ):
-        if value is not None:
-            helps.append(_factor(
-                key=key, label=label, status=STATUS_DECLARED,
-                explanation="declared_on_label", rule=None, ruleset=ruleset,
-                quantity=_quantity(
-                    value, "g per 100 ml" if product.basis == "drink" else "g per 100 g",
-                ),
-            ))
+        for key, label, value in (
+            ("protein", "protein", product.protein_g),
+            ("fibre", "fibre", product.fibre_g),
+        ):
+            if value is not None:
+                helps.append(_factor(
+                    key=key, label=label, status=STATUS_DECLARED,
+                    explanation="declared_on_label", rule=None, ruleset=ruleset,
+                    quantity=_quantity(
+                        value, "g per 100 ml" if product.basis == "drink" else "g per 100 g",
+                    ),
+                ))
     if result.nova_group in {1, 2}:
         helps.append(_factor(
             key="processing", label="processing", status=STATUS_NO_CONCERN_FOUND,
@@ -518,7 +528,7 @@ def _factor_rows(
 
 
 def _processing_component(result: GradeResult) -> dict[str, Any]:
-    group = result.nova_group or 1
+    group = result.nova_group
     band = {1: "green", 2: "green", 3: "yellow", 4: "red"}[group]
     entry = next(
         (row for row in result.trace if row.rule_id.startswith("grade.step1.nova_")), None
@@ -604,6 +614,44 @@ def _naming_component(product: ProductInput, result: GradeResult) -> dict[str, A
         "source_url": (entry.reference.url if entry and entry.reference else None),
         "sources": _sources_for(entry),
     }
+
+
+def _gate_was_evaluated(result: GradeResult, step: int) -> bool:
+    """Use structured engine output, never final outcome or trace prose.
+
+    The culinary NOT_GRADED path keeps its established presentation contract.
+    Step 2 can emit traces for independent rules even when no nutrient band
+    could be evaluated. Only bands prove that the panel had a usable basis.
+    """
+    if result.outcome is GradeOutcome.NOT_GRADED:
+        return True
+    if step == 1:
+        return result.nova_group in (1, 2, 3, 4) and any(
+            entry.step == 1 and entry.rule_id.startswith("grade.step1.nova_")
+            for entry in result.trace
+        )
+    if step == 2:
+        return bool(result.bands)
+    return any(entry.step == step for entry in result.trace)
+
+
+def _unevaluated_component(key: str) -> dict[str, Any]:
+    """A skipped gate has no safe finding, rule, or source to publish."""
+    component: dict[str, Any] = {
+        "key": key,
+        "band": "yellow",
+        "state": STATUS_NOT_ENOUGH_INFORMATION,
+        "rule": None,
+        "finding": None,
+        "source": None,
+        "source_url": None,
+        "sources": [],
+    }
+    if key == "nutrients":
+        component.update(high=[], exempt=[])
+    elif key == "naming":
+        component.update(ingredient=None, declared_percent=None)
+    return component
 
 
 def _ingredient_rows(product: ProductInput) -> list[dict[str, Any]]:
@@ -726,10 +774,14 @@ def present(
             "protein_g": _safe_float(product.protein_g),
         },
         "components": [
-            _processing_component(result),
-            _nutrient_component(result),
-            _additive_component(product, result),
-            _naming_component(product, result),
+            _processing_component(result) if _gate_was_evaluated(result, 1)
+            else _unevaluated_component("processing"),
+            _nutrient_component(result) if _gate_was_evaluated(result, 2)
+            else _unevaluated_component("nutrients"),
+            _additive_component(product, result) if _gate_was_evaluated(result, 3)
+            else _unevaluated_component("additives"),
+            _naming_component(product, result) if _gate_was_evaluated(result, 4)
+            else _unevaluated_component("naming"),
         ],
         # Product Result Contract V1. These canonical arrays are the one
         # presentation calculation path; legacy names below are aliases only.

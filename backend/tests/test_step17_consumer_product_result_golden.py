@@ -9,8 +9,12 @@ is not evidence that nothing changed.
 
 The golden file next to this module was captured on the exact pre-Step-17
 ``main`` (``261b157c``), before any route code was touched, by running the
-scenarios below through the real routes. This module replays the same
-scenarios on the current code and requires the same answers: every field of
+scenarios below through the real routes. Audit Lane 3 deliberately corrected
+the nutrient state for the identity-only label, whose unknown basis has no
+nutrient bands or Step-2 trace; that is the only expected presentation
+difference from the capture. This module
+replays the same scenarios on the current code and requires the pinned answers:
+every field of
 the Product Result and of the Purchase OS scan check, for an ordinary graded
 scan, a physical pack the device itself confirmed, reference mode, an Open
 Food Facts-only product, an unknown barcode, an identity-only label, a
@@ -146,7 +150,7 @@ async def test_the_consumer_product_result_is_unchanged_under_a_published_rulese
     captured = normalise(await capture_published(app_client, registered_supabase_user))
     golden = _golden()
     for name, answer in captured.items():
-        assert answer == golden[name], f"consumer answer for {name!r} drifted from the pre-Step-17 capture"
+        assert answer == golden[name], f"consumer answer for {name!r} drifted from the approved golden"
 
 
 async def test_the_consumer_product_result_is_unchanged_under_an_unpublished_ruleset(
@@ -156,7 +160,7 @@ async def test_the_consumer_product_result_is_unchanged_under_an_unpublished_rul
     assert captured["unpublished_ruleset"] == _golden()["unpublished_ruleset"]
 
 
-def test_the_golden_capture_covers_every_scenario_and_was_not_hand_edited():
+def test_the_golden_capture_covers_every_scenario():
     """Every scenario is present, each with both surfaces, and none is empty.
 
     The capture is the evidence; a scenario missing from it would pass the two
