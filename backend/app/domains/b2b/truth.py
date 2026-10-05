@@ -251,7 +251,13 @@ def project(barcode: str, snapshot: LabelSnapshot, graded: shared_truth.GradedPr
     if outcome == "not_graded":
         return _not_enough(barcode, REASON_NOT_GRADED)
     if outcome != "graded" or payload["grade"] is None:
-        if graded.ruleset.unpublished_required:
+        # Product Truth records the governed rule IDs that withheld a grade.
+        # A fired optional candidate is just as unpublished as a required
+        # candidate; invalid label values carry no governed rule ID here.
+        if any(
+            (row := graded.ruleset.for_rule(missing)) is not None and not row.published
+            for missing in graded.result.missing
+        ):
             return _not_enough(barcode, REASON_EVIDENCE_UNPUBLISHED)
         return _not_enough(barcode, REASON_LABEL_FACTS_INSUFFICIENT)
     decision = payload["decision"]

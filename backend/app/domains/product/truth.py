@@ -7,8 +7,8 @@ one sequence and it lives in one place:
 
 1. the deterministic gate engine grades the product
    (:func:`app.domains.nutrition.grading.grade_product`);
-2. the publication boundary withholds a letter whenever a required rule has
-   not finished the evidence lifecycle
+2. the publication boundary withholds a letter whenever a required rule, or
+   a fired grade-affecting optional rule, has not finished the evidence lifecycle
    (:func:`app.domains.nutrition.grading.production_rules.enforce_published_required_rules`);
 3. the presentation boundary turns the result into keys, bands, factors and
    their evidence (:func:`app.domains.nutrition.grading.presentation.present`).
