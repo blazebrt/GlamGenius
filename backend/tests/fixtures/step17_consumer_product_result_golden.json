@@ -403,7 +403,7 @@
      "state": "nova4"
     },
     {
-     "band": "yellow",
+     "band": "green",
      "exempt": [],
      "finding": null,
      "high": [],
@@ -412,7 +412,7 @@
      "source": null,
      "source_url": null,
      "sources": [],
-     "state": "not_enough_information"
+     "state": "clear"
     },
     {
      "band": "green",
@@ -1024,7 +1024,7 @@
      "state": "nova4"
     },
     {
-     "band": "yellow",
+     "band": "green",
      "exempt": [],
      "finding": null,
      "high": [],
@@ -1033,7 +1033,7 @@
      "source": null,
      "source_url": null,
      "sources": [],
-     "state": "not_enough_information"
+     "state": "clear"
     },
     {
      "band": "green",
