@@ -1994,7 +1994,7 @@
      "state": "nova3"
     },
     {
-     "band": "yellow",
+     "band": "green",
      "exempt": [],
      "finding": null,
      "high": [],
@@ -2003,7 +2003,7 @@
      "source": null,
      "source_url": null,
      "sources": [],
-     "state": "not_enough_information"
+     "state": "clear"
     },
     {
      "band": "green",
@@ -3408,7 +3408,7 @@
      "state": "nova1"
     },
     {
-     "band": "yellow",
+     "band": "green",
      "exempt": [],
      "finding": null,
      "high": [],
@@ -3417,7 +3417,7 @@
      "source": null,
      "source_url": null,
      "sources": [],
-     "state": "not_enough_information"
+     "state": "clear"
     },
     {
      "band": "green",

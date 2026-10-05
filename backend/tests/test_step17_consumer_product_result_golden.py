@@ -10,8 +10,9 @@ is not evidence that nothing changed.
 The golden file next to this module was captured on the exact pre-Step-17
 ``main`` (``261b157c``), before any route code was touched, by running the
 scenarios below through the real routes. Audit Lane 3 deliberately corrected
-the nutrient state for three examples with no evaluated nutrient panel; those
-are the only expected presentation differences from the capture. This module
+the nutrient state for the identity-only label, whose unknown basis has no
+nutrient bands or Step-2 trace; that is the only expected presentation
+difference from the capture. This module
 replays the same scenarios on the current code and requires the pinned answers:
 every field of
 the Product Result and of the Purchase OS scan check, for an ordinary graded
