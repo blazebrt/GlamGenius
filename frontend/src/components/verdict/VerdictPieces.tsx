@@ -216,10 +216,14 @@ export function ComponentRow({
               {` — ${component.term.plain}`}
             </Text>
           )}
-          <Text style={styles.bodyLead}>{S.why.ruleLead}</Text>
-          <Text style={styles.bodyText}>{component.rule}</Text>
-          <Text style={styles.bodyLead}>{S.why.sourceLead}</Text>
-          <Text style={styles.bodySource}>{component.source}</Text>
+          {!!component.rule && <>
+            <Text style={styles.bodyLead}>{S.why.ruleLead}</Text>
+            <Text style={styles.bodyText}>{component.rule}</Text>
+          </>}
+          {!!component.source && <>
+            <Text style={styles.bodyLead}>{S.why.sourceLead}</Text>
+            <Text style={styles.bodySource}>{component.source}</Text>
+          </>}
         </View>
       )}
     </View>

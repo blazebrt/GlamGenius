@@ -518,7 +518,7 @@ def _factor_rows(
 
 
 def _processing_component(result: GradeResult) -> dict[str, Any]:
-    group = result.nova_group or 1
+    group = result.nova_group
     band = {1: "green", 2: "green", 3: "yellow", 4: "red"}[group]
     entry = next(
         (row for row in result.trace if row.rule_id.startswith("grade.step1.nova_")), None
@@ -604,6 +604,44 @@ def _naming_component(product: ProductInput, result: GradeResult) -> dict[str, A
         "source_url": (entry.reference.url if entry and entry.reference else None),
         "sources": _sources_for(entry),
     }
+
+
+def _gate_was_evaluated(result: GradeResult, step: int) -> bool:
+    """Use structured engine output, never final outcome or trace prose.
+
+    The culinary NOT_GRADED path keeps its established presentation contract.
+    Step 2 can run without a trace entry when no nutrient changes the grade,
+    but its bands still prove that the gate evaluated the panel.
+    """
+    if result.outcome is GradeOutcome.NOT_GRADED:
+        return True
+    if step == 1:
+        return result.nova_group in (1, 2, 3, 4) and any(
+            entry.step == 1 and entry.rule_id.startswith("grade.step1.nova_")
+            for entry in result.trace
+        )
+    return (step == 2 and bool(result.bands)) or any(
+        entry.step == step for entry in result.trace
+    )
+
+
+def _unevaluated_component(key: str) -> dict[str, Any]:
+    """A skipped gate has no safe finding, rule, or source to publish."""
+    component: dict[str, Any] = {
+        "key": key,
+        "band": "yellow",
+        "state": STATUS_NOT_ENOUGH_INFORMATION,
+        "rule": None,
+        "finding": None,
+        "source": None,
+        "source_url": None,
+        "sources": [],
+    }
+    if key == "nutrients":
+        component.update(high=[], exempt=[])
+    elif key == "naming":
+        component.update(ingredient=None, declared_percent=None)
+    return component
 
 
 def _ingredient_rows(product: ProductInput) -> list[dict[str, Any]]:
@@ -726,10 +764,14 @@ def present(
             "protein_g": _safe_float(product.protein_g),
         },
         "components": [
-            _processing_component(result),
-            _nutrient_component(result),
-            _additive_component(product, result),
-            _naming_component(product, result),
+            _processing_component(result) if _gate_was_evaluated(result, 1)
+            else _unevaluated_component("processing"),
+            _nutrient_component(result) if _gate_was_evaluated(result, 2)
+            else _unevaluated_component("nutrients"),
+            _additive_component(product, result) if _gate_was_evaluated(result, 3)
+            else _unevaluated_component("additives"),
+            _naming_component(product, result) if _gate_was_evaluated(result, 4)
+            else _unevaluated_component("naming"),
         ],
         # Product Result Contract V1. These canonical arrays are the one
         # presentation calculation path; legacy names below are aliases only.

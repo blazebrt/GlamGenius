@@ -940,6 +940,19 @@ async def test_f_an_unpublished_optional_rule_that_fired_withholds_the_answer(ap
     )
 
 
+def _assert_invalid_scan_has_no_false_safe_components(body: dict) -> None:
+    components = {row["key"]: row for row in body["components"]}
+    assert set(components) == {"processing", "nutrients", "additives", "naming"}
+    for row in components.values():
+        assert (row["state"], row["band"]) == ("not_enough_information", "yellow")
+        assert (row["rule"], row["finding"], row["source"], row["source_url"], row["sources"]) == (
+            None, None, None, None, [],
+        )
+    assert components["processing"]["state"] != "nova1"
+    assert components["nutrients"]["state"] != "clear"
+    assert components["additives"]["state"] != "none"
+
+
 async def test_f_invalid_confirmed_sodium_cannot_be_graded_around(
     app_client, db_clean, off_clean, admin, rules, off_network,
 ):
@@ -957,6 +970,7 @@ async def test_f_invalid_confirmed_sodium_cannot_be_graded_around(
     consumer = consumer_response.json()
     assert (consumer["outcome"], consumer["grade"]) == ("not_enough_information", None)
     assert "invalid nutrition values" in consumer["missing"]
+    _assert_invalid_scan_has_no_false_safe_components(consumer)
     assert "50 mystery-units" not in consumer_response.text
     _, raw = await client_with_key(app_client, admin)
     b2b = await ok(app_client, raw, barcode)
@@ -979,6 +993,7 @@ async def test_f_invalid_off_sodium_cannot_be_graded_around_on_consumer_route(
     body = response.json()
     assert (body["outcome"], body["grade"]) == ("not_enough_information", None)
     assert "invalid nutrition values" in body["missing"]
+    _assert_invalid_scan_has_no_false_safe_components(body)
     assert "50 mystery-units" not in response.text
 
 
