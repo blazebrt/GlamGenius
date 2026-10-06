@@ -106,10 +106,12 @@ async def _reset_access_rate_state():
     over a session."""
     from app.api.v2 import access, commerce, growth, product
     from app.domains.growth import analytics as growth_analytics
+    from app.domains.product import report_policy
 
     def _clear() -> None:
         access._rate_state.clear()
         product._device_registration_limiter.reset()
+        report_policy.report_limiter.reset()
         growth._event_limiter.reset()
         commerce._event_limiter.reset()
         growth_analytics.reset_prune_throttle()
@@ -279,11 +281,7 @@ def fake_provider(monkeypatch) -> FakeProvider:
     return provider
 
 
-PNG_1PX = bytes.fromhex(
-    "89504e470d0a1a0a0000000d494844520000000100000001080600000"
-    "01f15c4890000000a49444154789c6360000002000100ffff03000006"
-    "0005570cf5a20000000049454e44ae426082"
-)
+from tests.image_fixtures import PNG as PNG_1PX  # noqa: E402
 
 
 def png_bytes() -> bytes:

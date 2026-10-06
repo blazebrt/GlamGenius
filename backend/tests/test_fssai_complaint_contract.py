@@ -65,11 +65,11 @@ async def device(app_client):
 
 async def _owned_photo(app_client, token) -> str:
     """A real MediaAsset owned by this caller, through the real upload route."""
-    from tests.conftest import PNG_1PX
+    from tests.image_fixtures import distinct_png
 
     response = await app_client.post(
         "/api/v2/media/upload", headers=auth(token),
-        files={"file": ("pack.png", PNG_1PX + uuid.uuid4().bytes, "image/png")},
+        files={"file": ("pack.png", distinct_png(), "image/png")},
         data={"purpose": sorted(ALLOWED_PURPOSES)[0]},
     )
     assert response.status_code == 200, response.text

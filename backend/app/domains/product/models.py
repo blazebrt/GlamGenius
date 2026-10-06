@@ -126,10 +126,13 @@ class LabelErrorReport(UUIDPrimaryKey, TimestampMixin, Base):
     reason: Mapped[str] = mapped_column(String(32), nullable=False)
     #: Where the photo of the pack went, when one was attached.
     photo_key: Mapped[str | None] = mapped_column(String(200))
+    #: Exact new-upload bytes; NULL on legacy rows (conservative quota cost).
+    photo_byte_size: Mapped[int | None] = mapped_column(Integer)
     resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     __table_args__ = (
         UniqueConstraint("device_id", "client_report_id", name="uq_label_report_device_client_id"),
+        CheckConstraint("photo_byte_size IS NULL OR photo_byte_size BETWEEN 0 AND 6291456", name="ck_label_error_reports_photo_size"),
         Index("ix_label_error_reports_barcode", "barcode", "created_at"),
         Index("ix_label_error_reports_open", "resolved_at"),
     )

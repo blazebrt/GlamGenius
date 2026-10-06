@@ -47,6 +47,7 @@ from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from tests.conftest import auth
+from tests.image_fixtures import JPEG_BLACK, JPEG_WHITE
 from tests.test_account_deletion_integrity import (
     _account,
     _factory,
@@ -61,8 +62,8 @@ from tests.test_account_deletion_integrity import (
 
 REPORT = "/api/v2/reports/label-error"
 DELETE = "/api/v2/privacy/account"
-PHOTO_A = b"\xff\xd8photo-from-phone-A"
-PHOTO_B = b"\xff\xd8photo-from-phone-B"
+PHOTO_A = JPEG_WHITE
+PHOTO_B = JPEG_BLACK
 
 
 # ---------------------------------------------------------------------------
@@ -1004,6 +1005,7 @@ async def test_c_c_an_outcome_that_cannot_be_checked_deletes_nothing(
     # It had in fact committed, and its photo is still there.
     [row] = await _rows(client_report_id="unknown-commit")
     [written] = storage.puts
+    assert written in storage.objects, "UNKNOWN commit outcome must not delete possibly durable evidence"
     assert row.photo_key == written and storage.objects[written] == PHOTO_A
     assert _deletes(storage) == []
     assert "outcome=unknown photo_written=True photo_removed=False" in caplog.text

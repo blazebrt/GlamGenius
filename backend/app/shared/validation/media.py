@@ -15,6 +15,7 @@ import struct
 
 from app.config import MEDIA_ALLOWED_MIME, MEDIA_MAX_BYTES
 from app.shared.errors.exceptions import MediaTooLargeError, UnsupportedMediaTypeError
+from app.shared.validation.image_structure import image_dimensions
 
 
 def sniff_mime(data: bytes) -> str | None:
@@ -130,4 +131,9 @@ def validate_upload(data: bytes, declared_type: str | None) -> tuple[str, int]:
             allowed=MEDIA_ALLOWED_MIME,
         )
 
+    if image_dimensions(data, sniffed) is None:
+        raise UnsupportedMediaTypeError(
+            "That photo is incomplete or malformed. Choose a JPEG, PNG or WebP photo with readable dimensions.",
+            allowed=MEDIA_ALLOWED_MIME,
+        )
     return sniffed, size

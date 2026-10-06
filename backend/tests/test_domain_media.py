@@ -37,6 +37,7 @@ from app.domains.media.storage.base import (
 from app.shared.database.sql import get_sessionmaker
 
 from tests.conftest import auth, png_bytes
+from tests.image_fixtures import JPEG_WHITE, WEBP
 
 pytestmark = pytest.mark.asyncio
 
@@ -45,29 +46,12 @@ pytestmark = pytest.mark.asyncio
 # Image fixtures — real magic bytes for each accepted type
 # ---------------------------------------------------------------------------
 
-def jpeg_bytes(width: int = 64, height: int = 32) -> bytes:
-    """A JPEG header with a genuine SOF0 frame, so dimensions are readable."""
-    return (
-        b"\xff\xd8"                                  # SOI
-        b"\xff\xe0\x00\x10JFIF\x00\x01\x01\x00\x00\x01\x00\x01\x00\x00"
-        + b"\xff\xc0\x00\x11\x08"                    # SOF0
-        + height.to_bytes(2, "big")
-        + width.to_bytes(2, "big")
-        + b"\x03\x01\x11\x00\x02\x11\x01\x03\x11\x01"
-        + b"\xff\xd9"                                # EOI
-    )
+def jpeg_bytes() -> bytes:
+    return JPEG_WHITE
 
 
-def webp_bytes(width: int = 8, height: int = 4) -> bytes:
-    """A VP8X-flavoured WebP container — enough for sniffing and dimensions."""
-    body = (
-        b"VP8X"
-        + (10).to_bytes(4, "little")
-        + b"\x00\x00\x00\x00"
-        + (width - 1).to_bytes(3, "little")
-        + (height - 1).to_bytes(3, "little")
-    )
-    return b"RIFF" + (len(body) + 4).to_bytes(4, "little") + b"WEBP" + body
+def webp_bytes() -> bytes:
+    return WEBP
 
 
 # ---------------------------------------------------------------------------
