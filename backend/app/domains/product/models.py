@@ -126,12 +126,37 @@ class LabelErrorReport(UUIDPrimaryKey, TimestampMixin, Base):
     reason: Mapped[str] = mapped_column(String(32), nullable=False)
     #: Where the photo of the pack went, when one was attached.
     photo_key: Mapped[str | None] = mapped_column(String(200))
+    #: Exact new-upload bytes; NULL on legacy rows (conservative quota cost).
+    photo_byte_size: Mapped[int | None] = mapped_column(Integer)
     resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     __table_args__ = (
         UniqueConstraint("device_id", "client_report_id", name="uq_label_report_device_client_id"),
+        CheckConstraint("photo_byte_size IS NULL OR photo_byte_size BETWEEN 0 AND 6291456", name="ck_label_error_reports_photo_size"),
         Index("ix_label_error_reports_barcode", "barcode", "created_at"),
         Index("ix_label_error_reports_open", "resolved_at"),
+    )
+
+
+class LabelReportResource(UUIDPrimaryKey, TimestampMixin, Base):
+    """Durable upload authority, NOT a filed report or customer observation.
+
+    Committed before storage; survives request rollback/cancellation/restart.
+    Unknown writes retain their exact key/count/bytes until reconciliation.
+    """
+
+    __tablename__ = "label_report_resources"
+    device_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("scan_devices.id", ondelete="RESTRICT"), nullable=False)
+    account_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("accounts.id", ondelete="CASCADE"), index=True)
+    client_report_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    photo_key: Mapped[str] = mapped_column(String(200), nullable=False, unique=True)
+    photo_byte_size: Mapped[int] = mapped_column(Integer, nullable=False)
+    write_state: Mapped[str] = mapped_column(String(16), nullable=False, default="unknown", server_default="unknown")
+
+    __table_args__ = (
+        UniqueConstraint("device_id", "client_report_id", name="uq_label_report_resource_identity"),
+        CheckConstraint("photo_byte_size BETWEEN 1 AND 6291456", name="ck_label_report_resource_size"),
+        CheckConstraint("write_state IN ('unknown', 'complete')", name="ck_label_report_resource_state"),
     )
 
 

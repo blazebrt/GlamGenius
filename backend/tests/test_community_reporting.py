@@ -27,7 +27,7 @@ from app.domains.media.models import MEDIA_STATUS_DELETED, MediaAsset
 from app.shared.database.sql import get_sessionmaker
 from sqlalchemy import select
 
-from tests.conftest import auth, png_bytes
+from tests.conftest import auth
 
 BARCODE = "8901058000191"
 BATCH = "B-123"
@@ -105,7 +105,8 @@ async def confirm_label(app_client, shopper: Shopper, barcode: str, facts: dict)
 async def upload_photo(app_client, shopper: Shopper, *, payload: bytes | None = None,
                        purpose: str = MEDIA_PURPOSE_COMMUNITY_OBSERVATION) -> str:
     """A distinct image per call unless the caller insists on the same bytes."""
-    data = payload if payload is not None else png_bytes() + uuid.uuid4().bytes
+    from tests.image_fixtures import distinct_png
+    data = payload if payload is not None else distinct_png()
     response = await app_client.post(
         "/api/v2/media/upload", headers=auth(shopper.token),
         files={"file": ("pack.png", data, "image/png")}, data={"purpose": purpose},
@@ -136,7 +137,8 @@ async def verdict(app_client, headers, barcode=BARCODE):
 async def three_reporters(app_client, registered_supabase_user, *, code=OBSERVATION_SEAL_BROKEN,
                           facts=None, same_photo_bytes=False):
     """Three separate people who each confirmed the pack and reported the same thing."""
-    shared = png_bytes() + uuid.uuid4().bytes
+    from tests.image_fixtures import distinct_png
+    shared = distinct_png()
     shoppers = []
     for _ in range(3):
         shopper = await make_shopper(

@@ -29,7 +29,8 @@ from app.domains.supplements.models import SupplementLabelComponent
 from app.shared.database.sql import get_sessionmaker
 from sqlalchemy import delete, func, select
 
-from tests.conftest import auth, png_bytes
+from tests.conftest import auth
+from tests.image_fixtures import distinct_png
 from tests.journey import ok
 from tests.test_step13_supplements import _publish_form
 
@@ -56,7 +57,7 @@ async def _supplement(client, headers, name: str = "Night magnesium") -> str:
 async def _upload(client, headers, data: bytes | None = None) -> str:
     response = await client.post(
         "/api/v2/media/upload", headers=headers,
-        files={"file": ("label.png", data if data is not None else png_bytes() + uuid.uuid4().bytes, "image/png")},
+        files={"file": ("label.png", data if data is not None else distinct_png(), "image/png")},
     )
     assert response.status_code == 200, response.text
     return response.json()["id"]

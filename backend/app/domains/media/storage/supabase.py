@@ -20,10 +20,16 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Iterable
+from contextlib import asynccontextmanager
+
+import httpx
+from storage3 import AsyncStorageClient
 
 from app.config import (
     MEDIA_SIGNED_URL_TTL_SECONDS,
+    SUPABASE_SERVICE_ROLE_KEY,
     SUPABASE_STORAGE_BUCKET,
+    SUPABASE_URL,
 )
 from app.domains.media.storage.base import (
     MediaStorage,
@@ -59,6 +65,8 @@ def _classify(exc: Exception) -> Exception:
     the SDK gives us today.
     """
     status = getattr(exc, "status_code", None) or getattr(exc, "status", None)
+    if isinstance(status, str) and status.isdecimal():
+        status = int(status)
     message = str(exc).lower()
     if status in (401, 403) or "unauthorized" in message or "forbidden" in message or "invalid signature" in message:
         return StorageUnauthorized(str(exc))
@@ -122,6 +130,51 @@ class SupabaseStorage(MediaStorage):
             )
 
         await self._run("upload", _do)
+
+    @asynccontextmanager
+    async def _report_api(self):
+        """F04-only async SDK transport; no detached mutating worker thread.
+
+        Pinned storage3 2.31.0 accepts a supplied HTTPX AsyncClient. Native
+        connect/read/write/pool limits plus a total asyncio deadline bound the
+        attempt. Cancellation closes the transport before propagating. Neither
+        closing a connection nor a timeout proves server-side non-commit: the
+        service must retain its already-committed unknown resource on failure.
+        No transport retry and no upsert of an uncertain key.
+        """
+        if not SUPABASE_URL or not SUPABASE_SERVICE_ROLE_KEY:
+            raise StorageMisconfigured("supabase_admin_not_configured")
+        headers = {"apikey": SUPABASE_SERVICE_ROLE_KEY, "Authorization": f"Bearer {SUPABASE_SERVICE_ROLE_KEY}"}
+        try:
+            async with asyncio.timeout(_STORAGE_TIMEOUT_SECONDS):
+                async with httpx.AsyncClient(timeout=httpx.Timeout(_STORAGE_TIMEOUT_SECONDS)) as client:
+                    api = AsyncStorageClient(f"{SUPABASE_URL.rstrip('/')}/storage/v1/", headers, http_client=client)
+                    yield api.from_(self._bucket)
+        except (TimeoutError, httpx.TimeoutException) as exc:
+            raise StorageTimeout("supabase_storage_report_timeout") from exc
+        except (StorageObjectMissing, StorageUnauthorized, StorageMisconfigured,
+                StorageInvalidResponse, StorageUnavailable, StorageTimeout):
+            raise
+        except Exception as exc:  # noqa: BLE001 — SDK boundary, cancellation propagates
+            raise _classify(exc) from exc
+
+    async def put_label_report(self, key: str, data: bytes, content_type: str) -> None:
+        async with self._report_api() as api:
+            await api.upload(key, data, {"content-type": content_type, "upsert": "false"})
+
+    async def label_report_exists(self, key: str) -> bool:
+        try:
+            async with self._report_api() as api:
+                info = await api.info(key)
+                if not isinstance(info, dict) or not info.get("id"):
+                    raise StorageInvalidResponse("supabase_storage_report_info_invalid")
+                return True
+        except StorageObjectMissing:
+            return False
+
+    async def delete_label_report(self, key: str) -> None:
+        async with self._report_api() as api:
+            await api.remove([key])
 
     async def get(self, key: str) -> bytes:
         api = self._bucket_api()

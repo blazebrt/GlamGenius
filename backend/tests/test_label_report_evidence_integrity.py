@@ -30,6 +30,7 @@ from app.domains.media.storage import factory as storage_factory
 from app.domains.media.storage.base import (
     StorageObjectMissing,
     StorageUnavailable,
+    StorageWriteNotStarted,
     account_prefix,
 )
 from app.domains.privacy import deletion_service
@@ -47,6 +48,7 @@ from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from tests.conftest import auth
+from tests.image_fixtures import JPEG_BLACK, JPEG_WHITE
 from tests.test_account_deletion_integrity import (
     _account,
     _factory,
@@ -61,8 +63,8 @@ from tests.test_account_deletion_integrity import (
 
 REPORT = "/api/v2/reports/label-error"
 DELETE = "/api/v2/privacy/account"
-PHOTO_A = b"\xff\xd8photo-from-phone-A"
-PHOTO_B = b"\xff\xd8photo-from-phone-B"
+PHOTO_A = JPEG_WHITE
+PHOTO_B = JPEG_BLACK
 
 
 # ---------------------------------------------------------------------------
@@ -91,7 +93,9 @@ class _EvidenceStorage:
 
     async def put(self, key, data, content_type):
         if self.put_failure is not None:
-            raise self.put_failure
+            # This fault is explicitly BEFORE dispatch or object mutation;
+            # unlike timeout/acknowledgement loss, non-write is proven.
+            raise StorageWriteNotStarted(str(self.put_failure)) from self.put_failure
         self.puts.append(key)
         if self.put_pause is not None:
             await self.put_pause()
@@ -615,7 +619,7 @@ def test_l_the_order_is_idempotency_then_lifecycle_then_bytes():
         body.index("_existing_label_report("),
         body.index("identity_service.hold_account_active("),
         body.index("label_report_photo_key("),
-        body.index(".put("),
+        body.index("upload_report_photo("),
     ]
     assert order == sorted(order), order
 
@@ -994,6 +998,12 @@ async def test_c_c_an_outcome_that_cannot_be_checked_deletes_nothing(
     phone = await _phone(app_client)
     _lose_one_acknowledgement(monkeypatch)
     real_sessionmaker = product_service.get_sessionmaker
+    attempted_cleanup = []
+    original_cleanup = product_service.discard_unfiled_report_photo
+    async def cleanup(key):
+        attempted_cleanup.append(key)
+        return await original_cleanup(key)
+    monkeypatch.setattr(product_service, "discard_unfiled_report_photo", cleanup)
 
     def unavailable_check():
         raise ConnectionRefusedError("the database cannot be reached for the check")
@@ -1004,8 +1014,10 @@ async def test_c_c_an_outcome_that_cannot_be_checked_deletes_nothing(
     # It had in fact committed, and its photo is still there.
     [row] = await _rows(client_report_id="unknown-commit")
     [written] = storage.puts
+    assert written in storage.objects, "UNKNOWN commit outcome must not delete possibly durable evidence"
     assert row.photo_key == written and storage.objects[written] == PHOTO_A
     assert _deletes(storage) == []
+    assert attempted_cleanup == [], "UNKNOWN database commit does not license storage compensation"
     assert "outcome=unknown photo_written=True photo_removed=False" in caplog.text
     # D, after an unknown outcome: the phone's retry reconciles to the durable report.
     monkeypatch.setattr(product_service, "get_sessionmaker", real_sessionmaker)

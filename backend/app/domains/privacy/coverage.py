@@ -229,7 +229,7 @@ EXPORT_COVERAGE: dict[str, ExportCoverage] = {
     # whether one was attached; the key itself never leaves.
     "label_error_reports": _domain(
         "product_scans", "label_error_reports", _ACCOUNT, withheld=("photo_key",),
-        note="photo_attached says whether a photo was sent; its storage key is not exported.",
+        note="photo_attached and photo_byte_size describe the attachment; legacy size is null. Its storage key is not exported.",
     ),
     "product_watches": _domain(
         "product_scans", "product_watches", _ACCOUNT,

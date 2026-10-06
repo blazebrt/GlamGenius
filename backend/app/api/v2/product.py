@@ -44,6 +44,7 @@ from app.domains.product import (
     extraction,
     label_evidence,
     pack_context,
+    report_policy,
     service,
 )
 from app.domains.product import truth as product_truth
@@ -51,9 +52,11 @@ from app.domains.product import watch as product_watch
 from app.domains.product.confidence import ProductConfidence
 from app.domains.product.fssai import find_licence, is_valid_licence
 from app.domains.product.models import FssaiComplaintHandoff, LabelSnapshot, ScanDevice
+from app.domains.product.report_policy import MAX_REPORT_PHOTO_BYTES
 from app.domains.value import service as value_service
 from app.shared.database.sql import get_session
 from app.shared.errors.exceptions import (
+    MediaTooLargeError,
     StorageMisconfiguredError,
     StorageUnavailableError,
     ValidationFailedError,
@@ -70,10 +73,6 @@ from app.shared.security.rate_limit import FixedWindowLimiter
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
-
-#: A photo of a pack, not a photo album. Bigger than this is a mistake.
-MAX_REPORT_PHOTO_BYTES = 6 * 1024 * 1024
-
 
 # The body schemas have always bounded a barcode at 6-64 characters. The
 # address did not, so the same value arriving in the path went unchecked into a
@@ -688,8 +687,32 @@ async def public_fssai_handoff_count(session: AsyncSession = Depends(get_session
     return {"reviewed_official_handoffs": int(count or 0), "filed_count_known": False}
 
 
+async def _read_report_photo(photo: UploadFile) -> bytes:
+    """At most the ceiling plus one byte, in bounded reads, before DB locks."""
+    data = bytearray()
+    while True:
+        chunk = await photo.read(min(report_policy.REPORT_READ_CHUNK_BYTES, MAX_REPORT_PHOTO_BYTES + 1 - len(data)))
+        if not chunk:
+            return bytes(data)
+        data.extend(chunk)
+        if len(data) > MAX_REPORT_PHOTO_BYTES:
+            raise MediaTooLargeError("That report photo is too large. Choose a smaller photo.", max_bytes=MAX_REPORT_PHOTO_BYTES)
+
+
+def _limit_label_report(request: Request, device_id: uuid.UUID, account_id: uuid.UUID | None) -> None:
+    identities = [(f"ip:{client_ip(request) or 'unknown'}", report_policy.REPORT_IP_RATE_LIMIT),
+                  (f"device:{device_id}", report_policy.REPORT_DEVICE_RATE_LIMIT)]
+    if account_id is not None:
+        identities.append((f"account:{account_id}", report_policy.REPORT_ACCOUNT_RATE_LIMIT))
+    for key, ceiling in identities:
+        if report_policy.report_limiter.hit(key, limit=ceiling):
+            retry = report_policy.report_limiter.retry_after_seconds(key)
+            raise HTTPException(429, detail={"code": "label_report_rate_limit", "reason": key.split(":", 1)[0], "retryable": True, "retry_after_seconds": retry}, headers={"Retry-After": str(retry)})
+
+
 @router.post("/reports/label-error", status_code=status.HTTP_201_CREATED)
 async def report_label_error(
+    request: Request,
     client_report_id: str = Form(..., min_length=6, max_length=64),
     subject: str = Form(..., min_length=1, max_length=200),
     reason: str = Form(...),
@@ -720,17 +743,14 @@ async def report_label_error(
     lifecycle next, then one write under a key the server builds. The caller's
     ``client_report_id`` never names an object.
     """
+    _limit_label_report(request, device.id, current.account_id if current is not None else None)
     if reason not in service.REPORT_REASONS:
         raise ValidationFailedError("That is not a reason we recognise.", field="reason")
 
     data: bytes | None = None
     content_type: str | None = None
     if photo is not None:
-        data = await photo.read()
-        if data and len(data) > MAX_REPORT_PHOTO_BYTES:
-            raise ValidationFailedError(
-                "That photo is too large. Take it again at a smaller size.", field="photo",
-            )
+        data = await _read_report_photo(photo)
         content_type = photo.content_type
 
     try:
@@ -738,8 +758,11 @@ async def report_label_error(
             session,
             device_id=device.id, account_id=current.account_id if current is not None else None,
             client_report_id=client_report_id, subject=subject, reason=reason,
-            barcode=barcode, photo=data or None, photo_content_type=content_type,
+            barcode=barcode, photo=data, photo_content_type=content_type,
         )
+    except report_policy.ReportQuotaExceeded as exc:
+        # A durable retained-resource ceiling, not a timed rate window.
+        raise HTTPException(429, detail={"code": "label_report_quota", "reason": exc.reason, "retryable": False}) from None
     except service.ReportAccountNotActive:
         # The reporting account asked to be deleted first. Nothing was stored.
         raise AccountInactiveError() from None

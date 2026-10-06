@@ -320,12 +320,19 @@ async def _claim_locked(session: AsyncSession) -> AccountDeletionJob | None:
 
 async def run_job(session: AsyncSession, job: AccountDeletionJob) -> tuple[str, str | None]:
     """Advance the job one stage. Returns ``(new_state, error_code)``."""
+    from app.domains.product.report_resources import reconcile_account
+
     try:
         if job.state == STATE_REQUESTED or job.state == STATE_STORAGE_LISTING:
             job.state = STATE_STORAGE_DELETING
             await session.flush()
 
         if job.state == STATE_STORAGE_DELETING:
+            # Do this BEFORE prefix deletion: deleting a visible uncertain
+            # write first would erase the proof that its upload completed.
+            if await reconcile_account(session, job.account_id):
+                _schedule_retry(job, code="storage_incomplete", stage=job.state)
+                return job.state, "storage_incomplete"
             _removed, remaining = await media_service.purge_account_storage(job.account_id)
             if remaining:
                 # Object listing after delete still shows keys → the storage
@@ -361,6 +368,9 @@ async def run_job(session: AsyncSession, job: AccountDeletionJob) -> tuple[str, 
             await session.flush()
 
         if job.state == STATE_DATABASE_DELETING:
+            if await reconcile_account(session, job.account_id):
+                _schedule_retry(job, code="storage_incomplete", stage=job.state)
+                return job.state, "storage_incomplete"
             # Final storage barrier, before anything irreversible in the
             # database and so before the Auth identity. The purge at the start
             # proved the prefix empty *then*; a request already in flight when

@@ -96,12 +96,7 @@ from sqlalchemy import func, select
 pytestmark = pytest.mark.asyncio
 
 
-PNG_1PX = bytes.fromhex(
-    "89504e470d0a1a0a0000000d494844520000000100000001080600000"
-    "01f15c4890000000a49444154789c6360000002000100ffff03000006"
-    "0005570cf5a20000000049454e44ae426082"
-)
-
+from tests.image_fixtures import PNG as PNG_1PX
 
 # ---------------------------------------------------------------------------
 # Test doubles for external boundaries

@@ -36,6 +36,14 @@ class StorageUnavailable(StorageError):
     """The provider is reachable but degraded, or the network failed."""
 
 
+class StorageWriteNotStarted(StorageUnavailable):
+    """Adapter proves failure occurred BEFORE dispatching a mutating request.
+
+    Never infer this from a timeout, lost connection, cancellation or absent
+    object. It is an explicit terminal non-write guarantee, not a retry hint.
+    """
+
+
 class StorageMisconfigured(StorageError):
     """A required setting is missing or nonsensical.
 
