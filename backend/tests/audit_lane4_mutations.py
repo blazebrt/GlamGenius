@@ -30,6 +30,7 @@ def _replace(monkeypatch, module, name, old, new):
 def _inject_lane4_mutant(request, monkeypatch):
     from app.api.v2 import product as route
     from app.domains.product import report_policy as policy
+    from app.domains.product import report_resources as resources
     from app.domains.product import service
     from app.shared.validation import media
     mutant = request.config.getoption("--lane4-mutant")
@@ -83,5 +84,17 @@ def _inject_lane4_mutant(request, monkeypatch):
                 await get_storage().put("label-reports/rejected-mutation.png", b"rejected", "image/png")
                 raise
         monkeypatch.setattr(policy, "admit_report", admit)
+    elif mutant == "timeout_delete_treated_as_final":
+        _replace(monkeypatch, resources, "reconcile", '            if resource is not None and resource.write_state == "unknown" and not present:\n                return False',
+                 '            if resource is not None and resource.write_state == "unknown" and not present:\n                pass')
+    elif mutant == "cancellation_without_prewrite_authority":
+        # Cancellation after dispatch cannot run a post-upload reservation.
+        # Removing the pre-write commit recreates exactly that lifecycle gap.
+        monkeypatch.setattr(resources, "reserve", nothing)
+    elif mutant == "uncertain_retry_allocates_fresh_key":
+        monkeypatch.setattr(resources, "reject_or_reconcile_retry", nothing)
+        _replace(monkeypatch, resources, "reserve", "client_report_id=client_report_id", "client_report_id=uuid.uuid4().hex")
+    elif mutant == "uncertain_bytes_omitted":
+        _replace(monkeypatch, policy, "admit_report", "        size += pending_size", "        size += 0")
     elif mutant is not None:
         raise ValueError(f"Unknown Lane 4 mutant: {mutant}")

@@ -12,7 +12,7 @@ import uuid
 from sqlalchemy import case, func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.domains.product.models import LabelErrorReport
+from app.domains.product.models import LabelErrorReport, LabelReportResource
 from app.shared.security.rate_limit import FixedWindowLimiter
 
 MAX_REPORT_PHOTO_BYTES = 6 * 1024 * 1024
@@ -75,6 +75,17 @@ async def admit_report(session: AsyncSession, *, device_id: uuid.UUID, account_i
         count, size = (await session.execute(
             select(func.count(LabelErrorReport.id), func.coalesce(func.sum(photo_cost), 0)).where(predicate)
         )).one()
+        resource_predicate = (LabelReportResource.device_id == device_id if name == "device"
+                              else LabelReportResource.account_id == account_id)
+        # Reservations survive failures/restart. A filed report atomically
+        # retires its reservation; exclude a matching row defensively so an
+        # ambiguous filing acknowledgement cannot double-charge one identity.
+        pending_count, pending_size = (await session.execute(select(
+            func.count(LabelReportResource.id), func.coalesce(func.sum(LabelReportResource.photo_byte_size), 0)
+        ).where(resource_predicate, ~select(LabelErrorReport.id).where(
+            LabelErrorReport.id == LabelReportResource.id).exists()))).one()
+        count += pending_count
+        size += pending_size
         if count >= count_limit:
             raise ReportQuotaExceeded(f"{name}_report_count_limit")
         if size + photo_bytes > byte_limit:

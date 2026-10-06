@@ -23,7 +23,7 @@ from datetime import UTC, datetime
 from enum import StrEnum
 from typing import Any
 
-from sqlalchemy import select, text, update
+from sqlalchemy import delete, select, text, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -37,11 +37,18 @@ from app.domains.off import taxonomy as off_taxonomy
 from app.domains.off.join import join_on_barcode, read_off_product, read_off_product_with_age
 from app.domains.off.models import OffProduct
 from app.domains.off.store import get_off_sessionmaker
-from app.domains.product import report_policy
+from app.domains.product import report_policy, report_resources
 from app.domains.product.confidence import CONFIDENCE_TEXT, ProductConfidence
 from app.domains.product.formula_projection import LINE_BOUNDARIES, boundary_significance
 from app.domains.product.fssai import find_licence, is_valid_licence
-from app.domains.product.models import LabelErrorReport, LabelSnapshot, ProductRecord, ScanDevice, ScanEvent
+from app.domains.product.models import (
+    LabelErrorReport,
+    LabelReportResource,
+    LabelSnapshot,
+    ProductRecord,
+    ScanDevice,
+    ScanEvent,
+)
 from app.shared.database.base import new_uuid, utcnow
 from app.shared.database.sql import get_sessionmaker
 from app.shared.errors.exceptions import MediaTooLargeError
@@ -796,22 +803,13 @@ async def _existing_label_report(
 
 
 async def discard_unfiled_report_photo(key: str) -> bool:
-    """Compensation: remove an object whose report is proven never to have committed.
+    """Proven-unfiled only. Uncertain writes retain durable quota authority.
 
-    Best effort by design. It runs on a failure path that is already raising,
-    and a second error here must not replace the first. What it cannot remove
-    is an object no report names; it can reveal nothing, and if it sits under
-    an account prefix the deletion worker's purge still removes it.
-
-    Returns whether the delete went through, so a caller never reports a
-    compensation that did not happen.
+    A completed delete is insufficient: require exact-key absence, and never
+    interpret absence of an unknown write as proof that it cannot appear later.
+    Database COMMITTED / UNKNOWN callers still do not invoke this function.
     """
-    try:
-        await storage_factory.get_storage().delete(key)
-    except Exception:  # noqa: BLE001 - never mask the failure being compensated
-        logger.warning("label_report_photo_compensation_failed")
-        return False
-    return True
+    return await report_resources.reconcile(key)
 
 
 class ReportCommitOutcome(StrEnum):
@@ -926,10 +924,12 @@ async def file_label_error_report(
        whoever has claimed the device it came from.
     3. **Quota locks, calculation and admission.** Account quota before device
        quota, both transaction-scoped; replay costs nothing. No flush here.
-    4. **Bytes, then the row.** A storage failure leaves no row pointing at
-       nothing. A row that fails to flush deletes them again
-       (:func:`discard_unfiled_report_photo`): nothing was committed, so an
-       ordinary failure does not orphan evidence.
+    4. **Durable resource, bytes, then the report.** A separate transaction
+       commits the exact key/bytes BEFORE upload, under the locks above. An
+       uncertain resource is not a filed report and remains quota-accounted
+       across cancellation, request rollback and restart. A retry reconciles
+       that resource rather than allocating another key. Successful filing
+       retires its resource atomically with the report's commit.
 
     **No row lock before the account's, so nothing is flushed before step 2.**
     Resolving the device token marks ``last_seen_at``; that UPDATE locks the
@@ -949,6 +949,8 @@ async def file_label_error_report(
     if account_id is not None and not await identity_service.hold_account_active(session, account_id):
         raise ReportAccountNotActive()
 
+    await report_resources.reject_or_reconcile_retry(session, device_id=device_id, client_report_id=client_report_id)
+
     size = 0
     content_type = None
     if photo is not None:
@@ -962,13 +964,14 @@ async def file_label_error_report(
     key: str | None = None
     if photo:
         key = label_report_photo_key(report_id=report_id, device_id=device_id, account_id=account_id, content_type=content_type)
+        await report_resources.reserve(report_id=report_id, device_id=device_id, account_id=account_id,
+            client_report_id=client_report_id, key=key, size=size)
         try:
-            await storage_factory.get_storage().put(key, photo, content_type)
-        except Exception:
-            # Upload acknowledgement can fail after the object was written.
-            # No report row has even been constructed, so this server-owned
-            # object is proven unfiled (unlike an ambiguous database commit).
-            # Compensation is best effort and never replaces the first error.
+            await report_resources.upload_report_photo(storage_factory.get_storage(), key, photo, content_type)
+        except BaseException:
+            # Includes cancellation; cleanup may itself be interrupted without
+            # losing authority because the resource was already committed.
+            # Unknown + absent is retained, not a guessed successful deletion.
             await discard_unfiled_report_photo(key)
             raise
 
@@ -981,6 +984,7 @@ async def file_label_error_report(
         async with session.begin_nested():
             session.add(row)
             await session.flush()
+            await session.execute(delete(LabelReportResource).where(LabelReportResource.id == report_id))
     except IntegrityError:
         # Only a writer that skipped the advisory lock can get here. Our object
         # goes; the report that won is the answer.

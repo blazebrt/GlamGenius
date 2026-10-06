@@ -138,6 +138,28 @@ class LabelErrorReport(UUIDPrimaryKey, TimestampMixin, Base):
     )
 
 
+class LabelReportResource(UUIDPrimaryKey, TimestampMixin, Base):
+    """Durable upload authority, NOT a filed report or customer observation.
+
+    Committed before storage; survives request rollback/cancellation/restart.
+    Unknown writes retain their exact key/count/bytes until reconciliation.
+    """
+
+    __tablename__ = "label_report_resources"
+    device_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("scan_devices.id", ondelete="RESTRICT"), nullable=False)
+    account_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("accounts.id", ondelete="CASCADE"), index=True)
+    client_report_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    photo_key: Mapped[str] = mapped_column(String(200), nullable=False, unique=True)
+    photo_byte_size: Mapped[int] = mapped_column(Integer, nullable=False)
+    write_state: Mapped[str] = mapped_column(String(16), nullable=False, default="unknown", server_default="unknown")
+
+    __table_args__ = (
+        UniqueConstraint("device_id", "client_report_id", name="uq_label_report_resource_identity"),
+        CheckConstraint("photo_byte_size BETWEEN 1 AND 6291456", name="ck_label_report_resource_size"),
+        CheckConstraint("write_state IN ('unknown', 'complete')", name="ck_label_report_resource_state"),
+    )
+
+
 class FssaiComplaintHandoff(UUIDPrimaryKey, TimestampMixin, Base):
     """A structured, user-confirmed preparation for the official portal.
 

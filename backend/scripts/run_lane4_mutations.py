@@ -20,6 +20,10 @@ CASES = {
     "commit_exception_guess_delete": "test_c_c_an_outcome_that_cannot_be_checked_deletes_nothing",
     "rejection_still_stores": "test_fresh_ids_hit_device_count_and_replay_at_ceiling_is_free",
     "upload_ack_compensation_removed": "test_storage_put_acknowledgement_failure_compensates_already_written_object[cleanup-available]",
+    "timeout_delete_treated_as_final": "test_late_write_after_failure_is_never_untracked[timeout]",
+    "cancellation_without_prewrite_authority": "test_late_write_after_failure_is_never_untracked[cancellation]",
+    "uncertain_retry_allocates_fresh_key": "test_uncertain_retry_never_allocates_another_key",
+    "uncertain_bytes_omitted": "test_unknown_uploads_remain_in_durable_quota_across_restarts[device-BYTE-device_report_photo_byte_limit]",
 }
 
 
@@ -27,6 +31,9 @@ def main() -> int:
     failures = []
     for mutant, test in CASES.items():
         module = "test_label_report_evidence_integrity" if mutant == "commit_exception_guess_delete" else "test_audit_lane4_public_resource_safety"
+        if mutant in {"timeout_delete_treated_as_final", "cancellation_without_prewrite_authority",
+                      "uncertain_retry_allocates_fresh_key", "uncertain_bytes_omitted"}:
+            module = "test_audit_lane4_uncertain_uploads"
         target = f"tests/{module}.py::{test}"
         result = subprocess.run([sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider", "-p", "tests.audit_lane4_mutations",
                                  "--lane4-mutant", mutant, target, "--tb=short"], capture_output=True, text=True, check=False)

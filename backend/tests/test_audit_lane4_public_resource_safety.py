@@ -113,8 +113,16 @@ async def test_two_independent_postgres_transactions_cannot_over_admit(
     first_device = await _device_id(await _phone(app_client))
     second_device = await _device_id(await _phone(app_client)) if account_id else first_device
     pause = race.pause()
-    storage.put_pause = pause
     first, second = _factory()(), _factory()()
+    original_admit = policy.admit_report
+    async def admit(session, **kwargs):
+        await original_admit(session, **kwargs)
+        if session is first:
+            # Pause after the admitted snapshot but BEFORE its independently
+            # durable reservation. A post-reservation storage pause alone can
+            # hide a missing quota lock because the new reservation is visible.
+            await pause()
+    monkeypatch.setattr(policy, "admit_report", admit)
     async def write(session, device_id, report_id):
         try:
             result = await _file(session, device_id, report_id, account_id)
@@ -139,7 +147,7 @@ async def test_two_independent_postgres_transactions_cannot_over_admit(
                     blockers = await watcher.scalar(text("SELECT pg_blocking_pids(:pid)"), {"pid": second_pid})
                 if first_pid in blockers:
                     return
-                assert len(storage.puts) == 1, "second fresh identity reached storage before quota lock released"
+                assert not storage.puts, "second fresh identity reached storage before quota lock released"
                 await asyncio.sleep(0)  # scheduler yield; the lock observation is the proof
             raise AssertionError("quota waiter never observed")
         try:
@@ -159,7 +167,8 @@ def test_admission_order_and_no_early_device_flush():
     source = inspect.getsource(service.file_label_error_report)
     body = source[source.index('"""', source.index('"""') + 3):]
     operations = ["lock_label_report_identity(", "_existing_label_report(", "hold_account_active(",
-                  "lock_report_quotas(", "admit_report(", "label_report_photo_key(", ".put(", "session.add(row)", "session.flush()"]
+                  "lock_report_quotas(", "admit_report(", "label_report_photo_key(", "report_resources.reserve(",
+                  "upload_report_photo(", "session.add(row)", "session.flush()"]
     positions = [body.index(op) for op in operations]
     assert positions == sorted(positions)
     assert "session.flush" not in body[:body.index("admit_report(")]
