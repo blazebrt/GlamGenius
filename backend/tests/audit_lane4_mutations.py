@@ -52,6 +52,8 @@ def _inject_lane4_mutant(request, monkeypatch):
                  "    if existing is not None:\n        await report_policy.admit_report(session, device_id=device_id, account_id=account_id, photo_bytes=len(photo or b''))\n        return existing, False, None")
     elif mutant == "serialization_removed":
         monkeypatch.setattr(policy, "lock_report_quotas", nothing)
+    elif mutant == "upload_ack_compensation_removed":
+        _replace(monkeypatch, service, "file_label_error_report", "            await discard_unfiled_report_photo(key)", "            pass")
     elif mutant == "trust_declared_mime":
         _replace(monkeypatch, service, "file_label_error_report", "content_type, size = validate_upload(photo, photo_content_type)", "content_type, size = photo_content_type, len(photo)")
     elif mutant == "accept_magic_only":

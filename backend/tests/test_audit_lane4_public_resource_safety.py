@@ -297,3 +297,29 @@ async def test_oversized_photo_refused_before_any_storage_or_row(app_client, db_
     response = await _post(app_client, phone, "oversize-photo-report")
     assert response.status_code == 413, response.text
     assert not storage.puts and not await _rows()
+
+
+@pytest.mark.parametrize("cleanup_available", [True, False], ids=["cleanup-available", "cleanup-unavailable"])
+async def test_storage_put_acknowledgement_failure_compensates_already_written_object(
+    app_client, db_clean, storage, monkeypatch, caplog, cleanup_available,
+):
+    from app.domains.media.storage.base import StorageUnavailable
+
+    original = storage.put
+
+    async def put_then_lose_acknowledgement(key, data, content_type):
+        await original(key, data, content_type)
+        if not cleanup_available:
+            storage.delete_failures[key] = StorageUnavailable("cleanup temporarily unavailable")
+        raise StorageUnavailable("upload acknowledgement lost")
+
+    monkeypatch.setattr(storage, "put", put_then_lose_acknowledgement)
+    phone = await _phone(app_client)
+    response = await _post(app_client, phone, "put-acknowledgement-lost")
+    assert response.status_code == 503, response.text
+    assert len(storage.puts) == 1 and not await _rows()
+    if cleanup_available:
+        assert not storage.objects, "a completed object write must not be orphaned by a failed upload acknowledgement"
+    else:
+        assert len(storage.objects) == 1
+        assert "label_report_photo_compensation_failed" in caplog.text

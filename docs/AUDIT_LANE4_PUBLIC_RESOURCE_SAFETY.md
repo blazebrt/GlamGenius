@@ -65,6 +65,12 @@ pixel decoding; no imaging dependency, decompression or dimension allocation.
 Animated WebP is refused as a label photo. New extensions match canonical MIME;
 existing JPEG and legacy keys remain readable/deletable by their stored keys.
 
+New fault injection also proved an existing upload-acknowledgement gap: a
+provider could write the object and then raise before any row was constructed.
+That pre-row failure now uses the existing best-effort compensation helper;
+failed cleanup is logged without replacing the upload error. This does not
+claim that an external provider operation still running after its timeout has
+been cancelled, or that unavailable storage can always be erased immediately.
 Storage failure leaves no report; flush failure compensates. Raised commit
 retains objects for COMMITTED/UNKNOWN; only proven NOT_COMMITTED permits delete.
 Privacy export includes nullable photo bytes, never the object path. Existing
@@ -79,11 +85,12 @@ secret, paid resource, entitlement, roadmap or AI behavior changes.
 ## Executed adversarial evidence
 
 `python scripts/run_lane4_mutations.py` executes opt-in in-process mutants on a
-disposable PostgreSQL database. Final complete run: **10/10 proven kills**:
+disposable PostgreSQL database. Final complete run: **11/11 proven kills**:
 quota removed; admission after storage; legacy unknown size zero; replay charged;
 serialization removed (second independent writer reaches storage before first
 commit); declared MIME trusted; magic-only file accepted; unbounded read;
-commit exception guess-deletes possibly durable evidence; rejection still stores.
+commit exception guess-deletes possibly durable evidence; rejection still stores;
+upload acknowledgement failure compensation removed.
 Kills are actual regression assertions, not import/setup failures. Normal pytest
 does not load the mutant plugin. No production code is changed by this runner.
 
@@ -95,7 +102,10 @@ and byte-distinct-photo semantics. No test is weakened or skipped.
 ## Local qualification and environment boundaries
 
 Expanded PostgreSQL-backed F04, report-evidence, media, storage, body-limit,
-device, deletion and privacy regressions: **248 passed**. Ruff, compileall and
+device, deletion and privacy regressions: **248 passed**. After the new upload
+acknowledgement regression proved its orphan path and the narrow correction,
+the latest dedicated F04 (30) plus report-integrity (32) suite: **62 passed**,
+including failed-cleanup warning/error preservation. Ruff, compileall and
 diff whitespace checks passed. One Alembic head: `n2o3p4q5r6`, directly after
 `m1n2o3p4q5`. Empty-database upgrade, schema drift check, populated downgrade /
 upgrade and repeated reference seed passed. Legacy rows survive with unknown

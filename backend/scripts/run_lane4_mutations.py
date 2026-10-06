@@ -19,6 +19,7 @@ CASES = {
     "unbounded_photo_read": "test_photo_reader_stops_at_cap_plus_one_and_never_requests_unbounded_read",
     "commit_exception_guess_delete": "test_c_c_an_outcome_that_cannot_be_checked_deletes_nothing",
     "rejection_still_stores": "test_fresh_ids_hit_device_count_and_replay_at_ceiling_is_free",
+    "upload_ack_compensation_removed": "test_storage_put_acknowledgement_failure_compensates_already_written_object[cleanup-available]",
 }
 
 

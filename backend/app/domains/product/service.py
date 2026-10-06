@@ -962,8 +962,15 @@ async def file_label_error_report(
     key: str | None = None
     if photo:
         key = label_report_photo_key(report_id=report_id, device_id=device_id, account_id=account_id, content_type=content_type)
-        # Storage errors propagate to the route before any row exists.
-        await storage_factory.get_storage().put(key, photo, content_type)
+        try:
+            await storage_factory.get_storage().put(key, photo, content_type)
+        except Exception:
+            # Upload acknowledgement can fail after the object was written.
+            # No report row has even been constructed, so this server-owned
+            # object is proven unfiled (unlike an ambiguous database commit).
+            # Compensation is best effort and never replaces the first error.
+            await discard_unfiled_report_photo(key)
+            raise
 
     row = LabelErrorReport(
         id=report_id, device_id=device_id, account_id=account_id,
