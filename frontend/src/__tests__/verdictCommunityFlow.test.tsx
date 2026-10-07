@@ -10,7 +10,8 @@ import { act, fireEvent, render, screen, waitFor } from '@testing-library/react-
 
 import VerdictScreen from '../../app/verdict';
 import { S } from '../strings/verdict';
-import { submitReport } from '../services/errorReports';
+import { makeReport, submitReport, type ErrorReport } from '../services/errorReports';
+import * as ImagePicker from 'expo-image-picker';
 
 const mockPush = jest.fn();
 jest.mock('expo-router', () => ({
@@ -47,6 +48,7 @@ jest.mock('../services/apiV2', () => ({
 }));
 
 let mockRegistrationState = 'registered';
+let mockReportOwner = 'account-A';
 jest.mock('../store/userStore', () => ({
   useUserStore: (selector: (state: { registrationState: string }) => unknown) =>
     selector({ registrationState: mockRegistrationState }),
@@ -80,6 +82,16 @@ async function renderScreen(communityObservations: unknown = null) {
 beforeEach(() => {
   jest.clearAllMocks();
   mockRegistrationState = 'registered';
+  mockReportOwner = 'account-A';
+  let reportSequence = 0;
+  (makeReport as jest.Mock).mockReset().mockImplementation((fields) => ({
+    ...fields, client_report_id: `label-report-${++reportSequence}`,
+    reported_at: '2026-10-07T10:00:00.000Z', owner: mockReportOwner,
+  }));
+  (submitReport as jest.Mock).mockReset().mockResolvedValue(true);
+  (ImagePicker.launchCameraAsync as jest.Mock).mockResolvedValue({
+    canceled: false, assets: [{ uri: 'file:///pack.jpg' }],
+  });
   mockReadContext.mockResolvedValue({
     barcode: '8901058000191', has_current_scan_context: true,
     batch_context_available: true, batch_number: 'b-123',
@@ -103,6 +115,103 @@ it('does not claim offline storage or dismiss the draft when a label report coul
   expect(screen.getByLabelText(S.report.optionWrongNumber)).toBeEnabled();
   expect(screen.getByText(S.report.title)).toBeTruthy();
 }, 20_000);
+
+describe('label-error draft retry authority on the real screen', () => {
+  const submit = submitReport as jest.Mock;
+  const factory = makeReport as jest.Mock;
+  const reportAt = (attempt: number): ErrorReport => submit.mock.calls[attempt][0];
+
+  async function openLabelReport() {
+    mockGetProductVerdict.mockResolvedValue(verdictSource(null));
+    const view = render(<VerdictScreen />);
+    await waitFor(() => expect(screen.getByLabelText('Report an error on Oat Cereal')).toBeTruthy(), { timeout: 10_000 });
+    fireEvent.press(screen.getByLabelText('Report an error on Oat Cereal'));
+    return view;
+  }
+
+  async function pickReason(label: string = S.report.optionWrongNumber) {
+    await act(async () => { fireEvent.press(screen.getByLabelText(label)); });
+  }
+
+  it('reuses the actual report and captured owner after an unproven unchanged retry', async () => {
+    submit.mockRejectedValueOnce(new Error('lost response and failed durable save'));
+    const view = await openLabelReport();
+    await pickReason();
+    const first = reportAt(0);
+    expect(screen.getByText(S.report.notSaved)).toBeTruthy();
+    expect(screen.getByText(S.report.title)).toBeTruthy();
+    mockReportOwner = 'account-B';
+    view.rerender(<VerdictScreen />);
+    await pickReason();
+    expect(submit).toHaveBeenCalledTimes(2);
+    expect(reportAt(1)).toBe(first);
+    expect(reportAt(1).client_report_id).toBe(first.client_report_id);
+    expect(reportAt(1).owner).toBe('account-A');
+    expect(factory).toHaveBeenCalledTimes(1);
+  }, 20_000);
+
+  it.each(['reason', 'photo'])('creates a new identity when the unproven draft changes its %s', async (change) => {
+    submit.mockRejectedValue(new Error('unproven'));
+    await openLabelReport();
+    await pickReason();
+    const first = reportAt(0);
+    if (change === 'photo') {
+      await act(async () => { fireEvent.press(screen.getByLabelText(S.report.addPhoto)); });
+    }
+    await pickReason(change === 'reason' ? S.report.optionWrongIngredient : S.report.optionWrongNumber);
+    expect(reportAt(1).client_report_id).not.toBe(first.client_report_id);
+    expect(factory).toHaveBeenCalledTimes(2);
+    expect(reportAt(1)).toMatchObject(change === 'reason'
+      ? { reason: 'wrong_ingredient' } : { photo_uri: 'file:///pack.jpg' });
+    // The changed draft now has its own stable authority too.
+    await pickReason(change === 'reason' ? S.report.optionWrongIngredient : S.report.optionWrongNumber);
+    expect(reportAt(2)).toBe(reportAt(1));
+    expect(factory).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not inherit a cancelled draft when the same report is opened again', async () => {
+    submit.mockRejectedValue(new Error('unproven'));
+    await openLabelReport();
+    await pickReason();
+    const first = reportAt(0);
+    fireEvent.press(screen.getByLabelText(S.report.cancel));
+    expect(screen.queryByText(S.report.title)).toBeNull();
+    fireEvent.press(screen.getByLabelText('Report an error on Oat Cereal'));
+    await pickReason();
+    expect(reportAt(1).client_report_id).not.toBe(first.client_report_id);
+    expect(factory).toHaveBeenCalledTimes(2);
+  });
+
+  it.each([true, false])('releases screen retry authority after proven completion (sent=%s)', async (sent) => {
+    submit.mockResolvedValueOnce(sent).mockRejectedValueOnce(new Error('new attempt unproven'));
+    await openLabelReport();
+    await pickReason();
+    expect(screen.getByText(sent ? S.report.sent : S.report.failed)).toBeTruthy();
+    const first = reportAt(0);
+    await pickReason();
+    expect(reportAt(1).client_report_id).not.toBe(first.client_report_id);
+    expect(factory).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not let a cancelled in-flight report replace a new draft or clear its identity', async () => {
+    let settleFirst!: (sent: boolean) => void;
+    const firstResponse = new Promise<boolean>((resolve) => { settleFirst = resolve; });
+    submit.mockReturnValueOnce(firstResponse).mockRejectedValueOnce(new Error('new draft unproven'));
+    await openLabelReport();
+    await pickReason();
+    fireEvent.press(screen.getByLabelText(S.report.cancel));
+    fireEvent.press(screen.getByLabelText('Report an error on Oat Cereal'));
+    await pickReason();
+    expect(submit).toHaveBeenCalledTimes(2);
+    const second = reportAt(1);
+    await act(async () => { settleFirst(true); });
+    expect(screen.getByText(S.report.notSaved)).toBeTruthy();
+    expect(screen.queryByText(S.report.sent)).toBeNull();
+    await pickReason();
+    expect(reportAt(2)).toBe(second);
+    expect(factory).toHaveBeenCalledTimes(2);
+  });
+});
 
 /**
  * The first render in this file pays for the whole verdict screen's module

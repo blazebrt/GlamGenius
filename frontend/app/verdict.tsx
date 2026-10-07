@@ -27,7 +27,7 @@ import {
 } from '../src/services/verdictModel';
 import { isSpeechAvailable, speak, stopSpeaking } from '../src/services/speech';
 import {
-  flushReports, makeReport, submitReport, type ReportReason,
+  flushReports, makeReport, submitReport, type ErrorReport, type ReportReason,
 } from '../src/services/errorReports';
 import { getProductVerdict } from '../src/services/verdictClient';
 import { readScanPurchaseCheck } from '../src/services/productScan';
@@ -77,6 +77,8 @@ export default function VerdictScreen() {
   const [reportBusy, setReportBusy] = useState(false);
   const [explaining, setExplaining] = useState<VerdictIngredient | null>(null);
   const [reportStatus, setReportStatus] = useState<string | null>(null);
+  const labelReportDraft = useRef<{ signature: string; report: ErrorReport } | null>(null);
+  const labelReportSession = useRef(0);
   const [explanation, setExplanation] = useState<{ explanation: string; rule: string | null } | null>(null);
 
   // The Community flow is deliberately separate state from the label-error
@@ -287,9 +289,19 @@ export default function VerdictScreen() {
   }, [router, signedIn]);
 
   const openReport = useCallback((subject: string) => {
+    labelReportSession.current++;
+    labelReportDraft.current = null;
     setReportSubject(subject);
     setPhotoUri(null);
     setReportStatus(null);
+    setReportBusy(false);
+  }, []);
+
+  const closeReport = useCallback(() => {
+    labelReportSession.current++;
+    labelReportDraft.current = null;
+    setReportSubject(null);
+    setReportBusy(false);
   }, []);
 
   const addPhoto = useCallback(async () => {
@@ -301,21 +313,33 @@ export default function VerdictScreen() {
 
   const sendReport = useCallback(async (reason: ReportReason) => {
     if (!reportSubject) return;
+    const session = labelReportSession.current;
+    const signature = JSON.stringify([barcode ?? null, reportSubject, reason, photoUri]);
+    // Keep the original object, key and captured owner while an unchanged
+    // draft's delivery/storage is uncertain. Today's account is not authority.
+    if (labelReportDraft.current?.signature !== signature) {
+      labelReportDraft.current = { signature, report: makeReport({
+        barcode: barcode ?? null, subject: reportSubject, reason, photo_uri: photoUri,
+      }) };
+    }
+    const report = labelReportDraft.current.report;
     setReportBusy(true);
     try {
-      const sent = await submitReport(makeReport({
-        barcode: barcode ?? null, subject: reportSubject, reason, photo_uri: photoUri,
-      }));
+      const sent = await submitReport(report);
+      // The server or durable queue now owns the retry. Never clear a newer
+      // draft or let a cancelled report's completion dismiss its replacement.
+      if (labelReportDraft.current?.report === report) labelReportDraft.current = null;
+      if (labelReportSession.current !== session) return;
       setReportStatus(sent ? S.report.sent : S.report.failed);
-      setTimeout(() => setReportSubject(null), 1600);
+      setTimeout(() => { if (labelReportSession.current === session) closeReport(); }, 1600);
     } catch {
       // No durable save was proven. Keep the draft/photo open for a retry,
       // rather than promising an offline delivery that cannot happen.
-      setReportStatus(S.report.notSaved);
+      if (labelReportSession.current === session) setReportStatus(S.report.notSaved);
     } finally {
-      setReportBusy(false);
+      if (labelReportSession.current === session) setReportBusy(false);
     }
-  }, [barcode, photoUri, reportSubject]);
+  }, [barcode, closeReport, photoUri, reportSubject]);
 
   const refreshOwnReports = useCallback(async () => {
     if (!barcode) return;
@@ -702,13 +726,13 @@ export default function VerdictScreen() {
       <Modal
         visible={reportSubject !== null}
         animationType={Platform.OS === 'web' ? 'none' : 'slide'}
-        onRequestClose={() => setReportSubject(null)}
+        onRequestClose={closeReport}
       >
         <View style={{ flex: 1, paddingTop: insets.top }}>
           <ReportSheet
             subject={reportSubject ?? ''}
             onPick={(reason) => void sendReport(reason)}
-            onCancel={() => setReportSubject(null)}
+            onCancel={closeReport}
             onAddPhoto={() => void addPhoto()}
             photoAdded={photoUri !== null}
             busy={reportBusy}
