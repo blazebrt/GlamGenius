@@ -302,12 +302,19 @@ export default function VerdictScreen() {
   const sendReport = useCallback(async (reason: ReportReason) => {
     if (!reportSubject) return;
     setReportBusy(true);
-    const sent = await submitReport(makeReport({
-      barcode: barcode ?? null, subject: reportSubject, reason, photo_uri: photoUri,
-    }));
-    setReportStatus(sent ? S.report.sent : S.report.failed);
-    setReportBusy(false);
-    setTimeout(() => setReportSubject(null), 1600);
+    try {
+      const sent = await submitReport(makeReport({
+        barcode: barcode ?? null, subject: reportSubject, reason, photo_uri: photoUri,
+      }));
+      setReportStatus(sent ? S.report.sent : S.report.failed);
+      setTimeout(() => setReportSubject(null), 1600);
+    } catch {
+      // No durable save was proven. Keep the draft/photo open for a retry,
+      // rather than promising an offline delivery that cannot happen.
+      setReportStatus(S.report.notSaved);
+    } finally {
+      setReportBusy(false);
+    }
   }, [barcode, photoUri, reportSubject]);
 
   const refreshOwnReports = useCallback(async () => {

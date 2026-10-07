@@ -59,22 +59,50 @@ export const makeReport = (
 const sendableNow = (report: ErrorReport): boolean =>
   !report.owner || report.owner === authAccountId();
 
-async function readQueue(): Promise<ErrorReport[]> {
-  try {
-    const raw = await AsyncStorage.getItem(QUEUE_KEY);
-    return raw ? (JSON.parse(raw) as ErrorReport[]) : [];
-  } catch {
-    return [];
+let reportQueueLane: Promise<unknown> = Promise.resolve();
+
+function withReportQueueLane<T>(work: () => Promise<T>): Promise<T> {
+  const run = reportQueueLane.then(work, work);
+  reportQueueLane = run.then(() => undefined, () => undefined);
+  return run;
+}
+
+const REASONS: readonly ReportReason[] = [
+  'wrong_number', 'wrong_ingredient', 'wrong_product', 'wrong_grade', 'pack_changed', 'something_else',
+];
+
+function isReport(value: unknown): value is ErrorReport {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const row = value as Record<string, unknown>;
+  return typeof row.client_report_id === 'string' && row.client_report_id.trim().length > 0
+    && (row.barcode === null || typeof row.barcode === 'string')
+    && typeof row.subject === 'string' && row.subject.trim().length > 0
+    && REASONS.includes(row.reason as ReportReason)
+    && typeof row.reported_at === 'string' && Number.isFinite(Date.parse(row.reported_at))
+    && (row.owner === undefined || row.owner === null || (typeof row.owner === 'string' && row.owner.length > 0))
+    && (row.photo_uri === undefined || row.photo_uri === null || typeof row.photo_uri === 'string');
+}
+
+/** Unknown storage is never empty storage on a read-modify-write path. */
+async function readQueueForMutation(): Promise<ErrorReport[]> {
+  const raw = await AsyncStorage.getItem(QUEUE_KEY);
+  if (raw === null) return [];
+  const rows: unknown = JSON.parse(raw);
+  if (!Array.isArray(rows) || !rows.every(isReport)) {
+    throw new Error('The saved report queue could not be read safely.');
   }
+  // Legacy duplicate IDs are one logical report, with the first saved owner
+  // and payload intact. Do not use timestamps or today's account as identity.
+  const seen = new Set<string>();
+  return rows.filter((row) => {
+    if (seen.has(row.client_report_id)) return false;
+    seen.add(row.client_report_id);
+    return true;
+  });
 }
 
 async function writeQueue(rows: ErrorReport[]): Promise<void> {
-  try {
-    await AsyncStorage.setItem(QUEUE_KEY, JSON.stringify(rows));
-  } catch {
-    // A full store must not lose the report the person is looking at; the
-    // send below is still attempted.
-  }
+  await AsyncStorage.setItem(QUEUE_KEY, JSON.stringify(rows));
 }
 
 async function post(report: ErrorReport): Promise<void> {
@@ -96,43 +124,62 @@ async function post(report: ErrorReport): Promise<void> {
   await postDeviceForm(`${V2}/reports/label-error`, form, { asAccount: report.owner ?? null });
 }
 
-/** Send now if we can, keep it if we cannot. Returns true when it went. */
+/** True: sent. False: durably queued. Rejection: neither could be proven. */
 export async function submitReport(report: ErrorReport): Promise<boolean> {
+  if (!isReport(report)) throw new Error('This report could not be saved safely.');
   try {
     if (!sendableNow(report)) throw new Error('made by an account that is not signed in');
     await post(report);
     return true;
   } catch {
-    const queue = await readQueue();
-    if (!queue.some((row) => row.client_report_id === report.client_report_id)) {
-      queue.push(report);
-      await writeQueue(queue);
-    }
+    await withReportQueueLane(async () => {
+      const queue = await readQueueForMutation();
+      if (!queue.some((row) => row.client_report_id === report.client_report_id)) {
+        await writeQueue([...queue, report]);
+      }
+    });
     return false;
   }
 }
 
 /** Flush anything held from a previous session. Safe to call on every launch. */
-export async function flushReports(): Promise<{ sent: number; remaining: number }> {
-  const queue = await readQueue();
-  if (queue.length === 0) return { sent: 0, remaining: 0 };
-  const left: ErrorReport[] = [];
-  let sent = 0;
+async function flushReportsOnce(): Promise<{ sent: number; remaining: number }> {
+  const queue = await withReportQueueLane(readQueueForMutation);
+  const acknowledged = new Set<string>();
   for (const report of queue) {
     // A report made as another account waits for that account, intact.
     if (!sendableNow(report)) {
-      left.push(report);
       continue;
     }
     try {
       await post(report);
-      sent += 1;
+      acknowledged.add(report.client_report_id);
     } catch {
-      left.push(report);
+      // Leave it intact; only a successful send is acknowledgement authority.
     }
   }
-  await writeQueue(left);
-  return { sent, remaining: left.length };
+  const remaining = await withReportQueueLane(async () => {
+    const latest = await readQueueForMutation();
+    const left = latest.filter((row) => !acknowledged.has(row.client_report_id));
+    if (acknowledged.size > 0) await writeQueue(left);
+    return left.length;
+  });
+  return { sent: acknowledged.size, remaining };
 }
 
-export const pendingReportCount = async (): Promise<number> => (await readQueue()).length;
+let activeFlush: Promise<{ sent: number; remaining: number }> | null = null;
+
+/** Network sends never hold the mutation lane. Overlapping callers share work. */
+export function flushReports(): Promise<{ sent: number; remaining: number }> {
+  if (activeFlush) return activeFlush;
+  const run = flushReportsOnce();
+  activeFlush = run;
+  const settled = () => { if (activeFlush === run) activeFlush = null; };
+  void run.then(settled, settled);
+  return run;
+}
+
+export const pendingReportCount = async (): Promise<number> => {
+  try { return (await withReportQueueLane(readQueueForMutation)).length; }
+  catch { return 0; } // Display-only; never used as mutation authority.
+};

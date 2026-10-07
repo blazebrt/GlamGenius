@@ -460,6 +460,7 @@ export const S = {
     sending: 'Sending',
     sent: 'Sent. Thank you — we check every one.',
     failed: 'We could not send that. It is saved and will go when you are back online.',
+    notSaved: 'We could not send or save that. Please try again.',
     cancel: 'Not now',
   },
 

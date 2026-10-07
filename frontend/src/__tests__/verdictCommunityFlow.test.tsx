@@ -10,6 +10,7 @@ import { act, fireEvent, render, screen, waitFor } from '@testing-library/react-
 
 import VerdictScreen from '../../app/verdict';
 import { S } from '../strings/verdict';
+import { submitReport } from '../services/errorReports';
 
 const mockPush = jest.fn();
 jest.mock('expo-router', () => ({
@@ -89,6 +90,19 @@ beforeEach(() => {
   mockSubmit.mockResolvedValue({ id: 'report-1', created: true });
   mockWithdraw.mockResolvedValue({ id: 'report-1', status: 'withdrawn' });
 });
+
+it('does not claim offline storage or dismiss the draft when a label report could not be saved', async () => {
+  (submitReport as jest.Mock).mockRejectedValueOnce(new Error('storage unavailable'));
+  mockGetProductVerdict.mockResolvedValue(verdictSource(null));
+  render(<VerdictScreen />);
+  await waitFor(() => expect(screen.getByLabelText('Report an error on Oat Cereal')).toBeTruthy(), { timeout: 10_000 });
+  fireEvent.press(screen.getByLabelText('Report an error on Oat Cereal'));
+  await act(async () => { fireEvent.press(screen.getByLabelText(S.report.optionWrongNumber)); });
+  expect(screen.getByText(S.report.notSaved)).toBeTruthy();
+  expect(screen.queryByText(S.report.failed)).toBeNull();
+  expect(screen.getByLabelText(S.report.optionWrongNumber)).toBeEnabled();
+  expect(screen.getByText(S.report.title)).toBeTruthy();
+}, 20_000);
 
 /**
  * The first render in this file pays for the whole verdict screen's module
