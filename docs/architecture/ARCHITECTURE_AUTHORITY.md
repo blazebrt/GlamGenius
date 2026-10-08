@@ -22,8 +22,9 @@ discrepancy; an old document never authorizes a change to Product Truth.
    separately and explicitly authorize any Phase B action. [Scale readiness and SLOs](../operations/SCALE_READINESS_AND_SLOS.md)
    governs planning targets and incident/restore maturity, not current SLAs.
    [Current recovery qualification status](../operations/BACKUP_RESTORE_QUALIFICATION.md)
-   records the Lane 6 read-only preflight and explicit F15 OPEN blocker; it is
-   not evidence of a completed production backup/restore.
+   records the executed October 8 live-source backup/isolated restore and
+   recovery boundaries. Closure still requires independent review; live
+   `d0e1f2g3h4` and undeployed development `o3p4q5r6s7` are distinct authorities.
 4. Domain-specific current authorities below explain one boundary; they do not
    override code, Constitution or operations.
 5. Roadmaps, V3 plans and old reports describe intent or history, never current
@@ -60,8 +61,9 @@ discrepancy; an old document never authorizes a change to Product Truth.
 - `docs/production/BACKUP_AND_RESTORE_DRILL.md` is an unexecuted draft that
   assumes paid PITR. **Marked historical / unverified**; current backup/restore
   evidence is tracked in [current recovery qualification status](../operations/BACKUP_RESTORE_QUALIFICATION.md)
-  (F15 OPEN), with future targets in scale readiness. The old fake-success
-  simulator was removed; no real restore was performed in the blocked preflight.
+  with independent F15 review still required and future targets in scale
+  readiness. The old fake-success simulator was removed. The initial blocked
+  preflight is superseded by the dated, executed live-source recovery proof.
 - Other occurrences of `Mongo`, `Celery`, `Redis`, old navigation and
   `release.yml` in phase/stabilisation reports are **historical citations**, not
   live instructions. They remain linked here instead of being mass-deleted.

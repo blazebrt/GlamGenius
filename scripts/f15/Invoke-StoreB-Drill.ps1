@@ -1,0 +1,483 @@
+param(
+    [Parameter(Mandatory=$true)][string]$CliPath,
+    [Parameter(Mandatory=$true)][string]$PsqlPath,
+    [Parameter(Mandatory=$true)][string]$LocalWorkDir,
+    [Parameter(Mandatory=$true)][string]$CertificatePath,
+    [Parameter(Mandatory=$true)][string]$EvidenceDirectory,
+    [Parameter(Mandatory=$true)][string]$PythonPath,
+    [string]$SourceHost = 'aws-0-ap-south-1.pooler.supabase.com',
+    [string]$ContainerName = 'supabase_db_glamgenius-f15-local-20261008',
+    [switch]$SelfTest
+)
+
+# Windows operator; read-only live source, disposable LOCAL target only.
+# Never dot-source: process termination is the final credential boundary.
+$ErrorActionPreference = 'Stop'
+$f15Root = [IO.Path]::GetFullPath($EvidenceDirectory)
+foreach ($f15OperatorDirectory in @($f15Root,[IO.Path]::GetFullPath($LocalWorkDir))) {
+    $f15Ancestor = $f15OperatorDirectory
+    while ($f15Ancestor) {
+        if (Test-Path -LiteralPath (Join-Path $f15Ancestor '.git')) { throw 'OPERATOR_WORKSPACE_MUST_BE_OUTSIDE_GIT' }
+        $f15Ancestor = [IO.Path]::GetDirectoryName($f15Ancestor)
+    }
+}
+if ($ContainerName -notmatch '^supabase_db_glamgenius-f15-[a-z0-9-]+$') { throw 'TASK_LOCAL_TARGET_REQUIRED' }
+[void][IO.Directory]::CreateDirectory($f15Root)
+$f15Cli = [IO.Path]::GetFullPath($CliPath)
+$f15Query = Join-Path $PSScriptRoot 'safe-source-manifest.sql'
+$f15LocalWork = [IO.Path]::GetFullPath($LocalWorkDir)
+$f15Psql = [IO.Path]::GetFullPath($PsqlPath)
+$f15Docker = (Get-Command docker.exe -ErrorAction Stop).Source
+$f15Container = $ContainerName
+$f15Image = 'public.ecr.aws/supabase/postgres:17.11.0.004'
+$f15DumpImage = 'public.ecr.aws/supabase/postgres:17.11.0.004-f15-tls-20261008'
+$f15CertificatePath = [IO.Path]::GetFullPath($CertificatePath)
+$f15UnusedPasswordFile = Join-Path $f15Root 'no-password-file-for-endpoint-probe'
+$f15ProgressPath = Join-Path $f15Root 'F15-Real-Drill-Progress.json'
+$f15RestoreAttempted = $false
+$f15OwnDumpClients = $false
+$f15Password = $null
+$f15Plaintext = $null
+$f15SecretUrl = $null
+$f15SecretPointer = [IntPtr]::Zero
+$f15TemporaryDirectory = $null
+$f15Evidence = [ordered]@{
+    status = 'PREPARING'; phase = 'local_preflight'
+    production_commit = '27f1df4a08f17321cba21b95a00a65b37ea5ce5a'
+    source_project_ref = 'thuyrlepavzdgkvdzuos'; source_expected_head = 'd0e1f2g3h4'
+    repository_main = 'f1a2db6dad3f6824a3d24f7f6a6ebcaaf8a1fc4f'
+    repository_expected_head = 'o3p4q5r6s7'; credential_disposed = $false; credential_received = $false
+    production_mutation = $false; artifacts = @()
+}
+
+function Write-F15Progress([string]$Phase) {
+    $f15Evidence.phase = $Phase
+    $f15Evidence.updated_at_utc = [DateTime]::UtcNow.ToString('o')
+    $f15SafeJson = $f15Evidence | ConvertTo-Json -Depth 100
+    [IO.File]::WriteAllText($f15ProgressPath, $f15SafeJson, [Text.UTF8Encoding]::new($false))
+}
+
+function ConvertTo-F15NativeArgument([string]$Value) {
+    if ($Value -notmatch '[\s"]' -and $Value.Length -gt 0) { return $Value }
+    $f15Quoted = [regex]::Replace($Value, '(\\*)"', '$1$1\"')
+    $f15Quoted = [regex]::Replace($f15Quoted, '(\\+)$', '$1$1')
+    return '"' + $f15Quoted + '"'
+}
+
+function Invoke-F15Native {
+    param([string]$Executable, [string[]]$Arguments, [hashtable]$ChildEnvironment = @{},
+          [string]$InputText = $null, [int]$TimeoutSeconds = 600)
+    $f15Start = New-Object Diagnostics.ProcessStartInfo
+    $f15Start.FileName = $Executable
+    $f15Start.Arguments = ($Arguments | ForEach-Object { ConvertTo-F15NativeArgument $_ }) -join ' '
+    $f15Start.WorkingDirectory = $f15Root
+    $f15Start.UseShellExecute = $false
+    $f15Start.CreateNoWindow = $true
+    $f15Start.RedirectStandardOutput = $true
+    $f15Start.RedirectStandardError = $true
+    $f15Start.RedirectStandardInput = $true
+    foreach ($f15EnvironmentKey in $ChildEnvironment.Keys) {
+        $f15Start.EnvironmentVariables[$f15EnvironmentKey] = [string]$ChildEnvironment[$f15EnvironmentKey]
+    }
+    $f15Child = New-Object Diagnostics.Process
+    $f15Child.StartInfo = $f15Start
+    try {
+        try { [void]$f15Child.Start() } catch { throw 'NATIVE_PROCESS_START_FAILED' }
+        $f15Start.Arguments = ''
+        foreach ($f15EnvironmentKey in $ChildEnvironment.Keys) { $f15Start.EnvironmentVariables.Remove($f15EnvironmentKey) }
+        $f15OutputTask = $f15Child.StandardOutput.ReadToEndAsync()
+        $f15ErrorTask = $f15Child.StandardError.ReadToEndAsync()
+        if ($null -ne $InputText) { $f15Child.StandardInput.Write($InputText) }
+        $f15Child.StandardInput.Close()
+        if (-not $f15Child.WaitForExit($TimeoutSeconds * 1000)) {
+            $f15Child.Kill()
+            $f15Child.WaitForExit()
+            throw 'NATIVE_PROCESS_TIMEOUT'
+        }
+        return [pscustomobject]@{ ExitCode = $f15Child.ExitCode; Output = $f15OutputTask.Result; Error = $f15ErrorTask.Result }
+    } finally {
+        $f15Start.Arguments = ''
+        foreach ($f15EnvironmentKey in $ChildEnvironment.Keys) { $f15Start.EnvironmentVariables.Remove($f15EnvironmentKey) }
+        $f15Child.Dispose()
+    }
+}
+
+function Assert-F15NativeSuccess($Result, [string]$Phase) {
+    if ($Result.ExitCode -ne 0) {
+        $f15Evidence.failure_phase = $Phase
+        $f15Evidence.native_exit_code = $Result.ExitCode
+        # Classify connection failures using fixed labels only. Never retain stderr,
+        # which may contain credential-bearing arguments or private SQL context.
+        $f15Evidence.native_failure_class = if ($Result.Error -match '(?i)password authentication failed|SASL.*mismatch|authentication failed') {
+            'DATABASE_PASSWORD_REJECTED'
+        } elseif ($Result.Error -match '(?i)no password supplied') {
+            'PASSWORD_NOT_RECEIVED_BY_CLIENT'
+        } elseif ($Result.Error -match '(?i)certificate|SSL error|TLS.*failed') {
+            'SOURCE_TLS_FAILED'
+        } elseif ($Result.Error -match '(?i)could not translate host|no such host') {
+            'SOURCE_DNS_FAILURE'
+        } elseif ($Result.Error -match '(?i)timeout expired|timed out') {
+            'SOURCE_CONNECTION_TIMEOUT'
+        } elseif ($Result.Error -match '(?i)connection refused|no route|network.*unreachable') {
+            'SOURCE_NETWORK_FAILURE'
+        } elseif ($Result.Error -match '(?i)permission denied|must be owner|must be superuser') {
+            'DATABASE_PERMISSION_FAILURE'
+        } else {
+            'REDACTED_COMMAND_FAILURE'
+        }
+        # SQLSTATE-only diagnostics; never copy native stderr or row context.
+        $f15SqlStates = [regex]::Matches($Result.Error, '(?m)ERROR:\s+([0-9A-Z]{5})\s*$') |
+            ForEach-Object { $_.Groups[1].Value } | Select-Object -Unique
+        $f15Evidence.sqlstates = @($f15SqlStates)
+        throw 'NATIVE_COMMAND_FAILED'
+    }
+}
+
+function New-F15ProtectedDirectory {
+    # Start-Process can inherit a PowerShell 7 module path into Windows PowerShell.
+    # Load the built-in module from this interpreter's own installation explicitly.
+    Import-Module (Join-Path $PSHOME 'Modules\Microsoft.PowerShell.Security\Microsoft.PowerShell.Security.psd1') -ErrorAction Stop
+    $f15TempRoot = [IO.Path]::GetFullPath((Join-Path $env:LOCALAPPDATA 'Temp'))
+    $f15NewPath = [IO.Path]::GetFullPath((Join-Path $f15TempRoot ('GlamGenius-F15-Recovery-' + [Guid]::NewGuid().ToString('N'))))
+    if (-not $f15NewPath.StartsWith($f15TempRoot.TrimEnd('\') + '\', [StringComparison]::OrdinalIgnoreCase)) {
+        throw 'PROTECTED_WORKSPACE_PATH_REJECTED'
+    }
+    [void][IO.Directory]::CreateDirectory($f15NewPath)
+    $f15CurrentSid = [Security.Principal.WindowsIdentity]::GetCurrent().User
+    $f15Security = New-Object Security.AccessControl.DirectorySecurity
+    $f15Security.SetOwner($f15CurrentSid)
+    $f15Security.SetAccessRuleProtection($true, $false)
+    $f15Rule = New-Object Security.AccessControl.FileSystemAccessRule($f15CurrentSid, 'FullControl', 'ContainerInherit,ObjectInherit', 'None', 'Allow')
+    $f15Security.AddAccessRule($f15Rule)
+    Set-Acl -LiteralPath $f15NewPath -AclObject $f15Security
+    $f15ActualAcl = Get-Acl -LiteralPath $f15NewPath
+    if (-not $f15ActualAcl.AreAccessRulesProtected) { throw 'PROTECTED_WORKSPACE_ACL_FAILED' }
+    foreach ($f15ActualRule in $f15ActualAcl.Access) {
+        if ($f15ActualRule.IdentityReference.Translate([Security.Principal.SecurityIdentifier]).Value -ne $f15CurrentSid.Value) {
+            throw 'PROTECTED_WORKSPACE_ACL_FAILED'
+        }
+    }
+    return $f15NewPath
+}
+
+function Read-F15HiddenPassword {
+    param([string]$Prompt = 'Store B DATABASE password (not your Supabase sign-in password; no echo): ')
+    if ([Console]::IsInputRedirected) { throw 'INTERACTIVE_TERMINAL_REQUIRED' }
+    $f15Buffer = [Security.SecureString]::new()
+    $f15ControlCMode = [Console]::TreatControlCAsInput
+    [Console]::Write($Prompt)
+    try {
+        [Console]::TreatControlCAsInput = $true
+        while ($true) {
+            $f15Key = [Console]::ReadKey($true)
+            if ($f15Key.Key -eq [ConsoleKey]::Escape -or (($f15Key.Modifiers -band [ConsoleModifiers]::Control) -and $f15Key.Key -eq [ConsoleKey]::C)) { throw 'CREDENTIAL_ENTRY_CANCELLED' }
+            if ($f15Key.Key -eq [ConsoleKey]::Enter) { if ($f15Buffer.Length -gt 0) { break }; continue }
+            if ($f15Key.Key -eq [ConsoleKey]::Backspace) { if ($f15Buffer.Length -gt 0) { $f15Buffer.RemoveAt($f15Buffer.Length - 1) }; continue }
+            if (-not [char]::IsControl($f15Key.KeyChar)) { $f15Buffer.AppendChar($f15Key.KeyChar) }
+        }
+        $f15Buffer.MakeReadOnly()
+        return $f15Buffer
+    } catch { $f15Buffer.Dispose(); throw 'CREDENTIAL_ENTRY_CANCELLED' }
+    finally { [Console]::TreatControlCAsInput = $f15ControlCMode; $f15Key = $null; [Console]::WriteLine() }
+}
+
+function Get-F15ComparableManifest($Manifest, [bool]$IncludeVault) {
+    $f15Comparison = [ordered]@{}
+    foreach ($f15Field in @('database','schema_context','alembic_heads','public_tables','public_table_counts',
+        'auth_users','storage_buckets','storage_objects','external_integrations','off_schema_present',
+        'later_label_report_resources_present','extensions','public_indexes','public_constraints','sorted_primary_id_sha256')) {
+        $f15Comparison[$f15Field] = $Manifest.$f15Field
+    }
+    if ($IncludeVault) { $f15Comparison['vault_rows'] = $Manifest.vault_rows }
+    return ($f15Comparison | ConvertTo-Json -Depth 100 -Compress)
+}
+
+function Get-F15SourceManifest([string]$Password) {
+    $f15SafeSourceUrl = 'postgresql://postgres.thuyrlepavzdgkvdzuos@' + $SourceHost + ':5432/postgres?sslmode=verify-full&connect_timeout=10'
+    $f15SourceResult = Invoke-F15Native -Executable $f15Psql -Arguments @('-X','-qAt','-v','ON_ERROR_STOP=1','-v','VERBOSITY=sqlstate','-v','SHOW_CONTEXT=never','--dbname',$f15SafeSourceUrl,'--command','\conninfo','--file',$f15Query) -ChildEnvironment @{PGPASSWORD=$Password; PGCLIENTENCODING='UTF8'; PGSSLROOTCERT=$f15CertificatePath; PGPASSFILE=$f15UnusedPasswordFile; PGOPTIONS='-c default_transaction_read_only=on -c statement_timeout=120000'} -TimeoutSeconds 180
+    Assert-F15NativeSuccess $f15SourceResult 'source_manifest'
+    # pg_stat_ssl describes the pooler-to-database hop. Verify this client's TLS
+    # using libpq's verify-full connection and its same-session conninfo instead.
+    $f15TlsProtocol = [regex]::Match($f15SourceResult.Output, 'SSL connection \(protocol:\s*(TLSv1\.[23])[,)]')
+    if (-not $f15TlsProtocol.Success) { throw 'SOURCE_CLIENT_TLS_NOT_VERIFIED' }
+    $f15Evidence.source_client_tls_verified = $true
+    $f15Evidence.source_client_tls_protocol = $f15TlsProtocol.Groups[1].Value
+    $f15ManifestLines = @($f15SourceResult.Output -split "`r?`n" | Where-Object { $_.TrimStart().StartsWith('{') })
+    if ($f15ManifestLines.Count -ne 1) { throw 'SOURCE_MANIFEST_FORMAT_REJECTED' }
+    try { return ($f15ManifestLines[0] | ConvertFrom-Json) } catch { throw 'SOURCE_MANIFEST_FORMAT_REJECTED' }
+}
+
+function Assert-F15SourceIdentity($Manifest) {
+    if ($Manifest.server_version -ne '17.6' -or $f15Evidence.source_client_tls_verified -ne $true) { throw 'SOURCE_VERSION_OR_SSL_MISMATCH' }
+    if ($Manifest.database -ne 'postgres' -or @($Manifest.alembic_heads).Count -ne 1 -or $Manifest.alembic_heads[0] -ne 'd0e1f2g3h4' -or $Manifest.off_schema_present -or $Manifest.later_label_report_resources_present) { throw 'SOURCE_AUTHORITY_MISMATCH' }
+    foreach ($f15ExpectedTable in @('accounts','invites','scans','scan_devices','product_records','external_integrations','alembic_version')) {
+        if ($Manifest.public_tables -notcontains $f15ExpectedTable) { throw 'SOURCE_AUTHORITY_MISMATCH' }
+    }
+    if (@($Manifest.public_tables).Count -ne 147) { throw 'SOURCE_AUTHORITY_MISMATCH' }
+    if ($Manifest.storage_objects -ne 0) { throw 'NONZERO_PRODUCTION_STORAGE_REQUIRES_SEPARATE_BYTE_RECOVERY' }
+}
+
+function Get-F15DumpCoverage([string]$Path) {
+    $f15CopyTables = New-Object 'Collections.Generic.HashSet[string]'
+    $f15CreatedSchemas = New-Object 'Collections.Generic.HashSet[string]'
+    $f15Reader = [IO.File]::OpenText($Path)
+    try {
+        while ($null -ne ($f15Line = $f15Reader.ReadLine())) {
+            if ($f15Line -match '^COPY\s+"([^"]+)"\."([^"]+)"\s*\(') { [void]$f15CopyTables.Add($Matches[1] + '.' + $Matches[2]) }
+            if ($f15Line -match '^CREATE SCHEMA(?: IF NOT EXISTS)?\s+"([^"]+)"') { [void]$f15CreatedSchemas.Add($Matches[1]) }
+        }
+    } finally { $f15Reader.Dispose(); $f15Line = $null }
+    return [ordered]@{ copy_tables = @($f15CopyTables | Sort-Object); created_schemas = @($f15CreatedSchemas | Sort-Object); vault_copy_present = @($f15CopyTables | Where-Object { $_ -like 'vault.*' }).Count -gt 0 }
+}
+
+try {
+    # A visible Windows PowerShell child can inherit PowerShell 7's module path.
+    # Bind built-in commands to this interpreter before any local preflight.
+    foreach ($f15BuiltinModule in @('Microsoft.PowerShell.Utility','Microsoft.PowerShell.Management','Microsoft.PowerShell.Security')) {
+        Import-Module (Join-Path $PSHOME ('Modules\' + $f15BuiltinModule + '\' + $f15BuiltinModule + '.psd1')) -ErrorAction Stop
+    }
+    $f15Evidence.phase = 'cli_version'
+    $f15Version = Invoke-F15Native $f15Cli @('--version')
+    Assert-F15NativeSuccess $f15Version 'cli_version'
+    if ($f15Version.Output.Trim() -ne '2.120.0') { throw 'CLI_VERSION_MISMATCH' }
+    $f15Evidence.phase = 'telemetry_status'
+    $f15Telemetry = Invoke-F15Native $f15Cli @('telemetry','status')
+    Assert-F15NativeSuccess $f15Telemetry 'telemetry_status'
+    if (($f15Telemetry.Output + $f15Telemetry.Error) -notmatch 'Telemetry is disabled') { throw 'TELEMETRY_MUST_BE_DISABLED' }
+    $f15Evidence.phase = 'docker_context'
+    $f15Context = Invoke-F15Native $f15Docker @('context','show')
+    Assert-F15NativeSuccess $f15Context 'docker_context'
+    if ($f15Context.Output.Trim() -ne 'desktop-linux') { throw 'LOCAL_DOCKER_CONTEXT_MISMATCH' }
+    # Never interfere with an existing operator. Only clients created after
+    # this empty-client preflight belong to this run's final cleanup.
+    $f15ExistingClients = Invoke-F15Native $f15Docker @('ps','-aq','--filter',('ancestor='+$f15DumpImage))
+    Assert-F15NativeSuccess $f15ExistingClients 'dump_client_preflight'
+    if ($f15ExistingClients.Output.Trim()) { throw 'EXISTING_DUMP_CLIENT_REFUSED' }
+    $f15OwnDumpClients = $true
+    $f15Evidence.phase = 'source_tls_configuration'
+    if ((Get-FileHash -LiteralPath $f15CertificatePath -Algorithm SHA256).Hash.ToLowerInvariant() -ne '700723581420dd1ac98fd7e9ac529f0ef210eadcaf87fc868a3ad7d114c2f3b7' -or (Test-Path -LiteralPath $f15UnusedPasswordFile)) { throw 'SOURCE_CA_OR_DUMP_IMAGE_MISMATCH' }
+    $f15DumpPin = [IO.File]::ReadAllText((Join-Path $f15LocalWork 'supabase\.temp\postgres-version')).Trim()
+    $f15DumpImageResult = Invoke-F15Native $f15Docker @('image','inspect',$f15DumpImage,'--format','{{json .Config.Env}}')
+    Assert-F15NativeSuccess $f15DumpImageResult 'source_tls_configuration'
+    $f15DumpImageEnvironment = $f15DumpImageResult.Output | ConvertFrom-Json
+    if ($f15DumpPin -ne '17.11.0.004-f15-tls-20261008' -or $f15DumpImageEnvironment -notcontains 'PGSSLMODE=verify-full' -or $f15DumpImageEnvironment -notcontains 'PGSSLROOTCERT=/etc/f15/supabase-prod-ca-2021.crt' -or $f15DumpImageEnvironment -notcontains 'PGOPTIONS=-c default_transaction_read_only=on -c statement_timeout=120000') { throw 'SOURCE_CA_OR_DUMP_IMAGE_MISMATCH' }
+    $f15Evidence.source_tls_mode = 'verify-full'
+    $f15Evidence.dump_image = $f15DumpImage
+    $f15Evidence.source_default_transaction_read_only = $true
+    $f15Evidence.phase = 'local_empty_target'
+    $f15LocalResult = Invoke-F15Native $f15Docker @('exec',$f15Container,'psql','-U','supabase_admin','-d','postgres','-X','-qAt','-v','ON_ERROR_STOP=1','-c',"SELECT jsonb_build_object('version',current_setting('server_version'),'public_tables',(SELECT count(*) FROM information_schema.tables WHERE table_schema='public' AND table_type='BASE TABLE'),'auth_users',(SELECT count(*) FROM auth.users),'storage_buckets',(SELECT count(*) FROM storage.buckets),'storage_objects',(SELECT count(*) FROM storage.objects),'vault_rows',(SELECT count(*) FROM vault.secrets))")
+    Assert-F15NativeSuccess $f15LocalResult 'local_empty_target'
+    $f15LocalInitial = $f15LocalResult.Output | ConvertFrom-Json
+    if ($f15LocalInitial.version -ne '17.11' -or $f15LocalInitial.public_tables -ne 0 -or $f15LocalInitial.auth_users -ne 0 -or $f15LocalInitial.storage_buckets -ne 0 -or $f15LocalInitial.storage_objects -ne 0 -or $f15LocalInitial.vault_rows -ne 0) { throw 'LOCAL_TARGET_NOT_EMPTY_OR_WRONG_VERSION' }
+    $f15Evidence.phase = 'protected_workspace'
+    $f15TemporaryDirectory = New-F15ProtectedDirectory
+    $f15Evidence.protected_workspace = $f15TemporaryDirectory
+    $f15Evidence.workspace_current_user_only = $true
+    $f15Evidence.cli_version = '2.120.0'
+    $f15Evidence.local_pg_version = '17.11'
+
+    if ($SelfTest) {
+        $f15Client = Invoke-F15Native $f15Docker @('run','--rm','--network',('container:'+$f15Container),'-e','PGPASSWORD=postgres','--mount',('type=bind,source='+$f15TemporaryDirectory+',target=/f15,readonly'),'--entrypoint','psql',$f15Image,'-h','127.0.0.1','-U','supabase_admin','-d','postgres','-X','-qAt','-v','ON_ERROR_STOP=1','-c','SELECT 1')
+        Assert-F15NativeSuccess $f15Client 'self_test_pg17_client'
+        if ($f15Client.Output.Trim() -ne '1') { throw 'SELF_TEST_CLIENT_RESULT_MISMATCH' }
+        $f15SelfFile = Join-Path $f15TemporaryDirectory 'synthetic-metadata.sql'
+        [IO.File]::WriteAllText($f15SelfFile, "COPY `"public`".`"synthetic_only`" (`"id`") FROM stdin;`n1`n\.`n", [Text.UTF8Encoding]::new($false))
+        $f15Coverage = Get-F15DumpCoverage $f15SelfFile
+        if ($f15Coverage.copy_tables -notcontains 'public.synthetic_only' -or $f15Coverage.vault_copy_present) { throw 'SELF_TEST_COVERAGE_RESULT_MISMATCH' }
+        Remove-Item -LiteralPath $f15SelfFile -Force
+        Remove-Item -LiteralPath $f15TemporaryDirectory -Force
+        $f15TemporaryDirectory = $null
+        $f15Evidence.status = 'OPERATOR_SELF_TEST_PASSED'
+        $f15Evidence.credential_disposed = $true
+        $f15ProgressPath = Join-Path $f15Root 'F15-Operator-Self-Test.json'
+        Write-F15Progress 'self_test_complete'
+        Write-Output 'Operator self-test passed: quoting, protected ACL, PG17 client mount, metadata-only scanning. No source connection or credential.'
+        exit 0
+    }
+
+    $f15Evidence.phase = 'interactive_console'
+    if ([Console]::IsInputRedirected) { throw 'INTERACTIVE_TERMINAL_REQUIRED' }
+    try { $Host.UI.RawUI.WindowTitle = 'F15 - Enter Store B password here' } catch { }
+    Write-Host 'F15 LIVE Store B recovery: deployed head d0e1f2g3h4. No production writes.'
+    if ([string]::IsNullOrWhiteSpace($SourceHost)) {
+        Write-F15Progress 'awaiting_nonsecret_pooler_hostname'
+        Write-Host 'Find project thuyrlepavzdgkvdzuos in Supabase, click Connect, and choose Session pooler.'
+        Write-Host 'Enter only its aws-...pooler.supabase.com hostname. Do not enter a full URL or password here.'
+    }
+    while ([string]::IsNullOrWhiteSpace($SourceHost)) {
+        $f15HostBuffer = Read-F15HiddenPassword -Prompt 'Session pooler hostname (not a password; hidden input; Escape cancels): '
+        $f15HostPointer = [IntPtr]::Zero
+        try {
+            $f15HostPointer = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($f15HostBuffer)
+            $f15HostInput = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($f15HostPointer)
+            $f15HostMatch = [regex]::Match($f15HostInput, '(?i)(?<![a-z0-9.-])aws-[0-9]+-ap-south-1\.pooler\.supabase\.com(?![a-z0-9.-])')
+            if ($f15HostMatch.Success) { $SourceHost = $f15HostMatch.Value.ToLowerInvariant() }
+        } finally {
+            if ($f15HostPointer -ne [IntPtr]::Zero) { [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($f15HostPointer) }
+            $f15HostBuffer.Dispose(); $f15HostInput = $null; $f15HostMatch = $null
+        }
+        if ([string]::IsNullOrWhiteSpace($SourceHost)) { Write-Host 'No Session pooler hostname was detected. Recheck Connect and paste only its hostname.' }
+    }
+    $SourceHost = $SourceHost.Trim().ToLowerInvariant()
+    if ($SourceHost -notmatch '^aws-[0-9]+-ap-south-1\.pooler\.supabase\.com$') { throw 'SOURCE_POOLER_HOST_REJECTED' }
+    $f15Evidence.source_host = $SourceHost
+    $f15Tcp = New-Object Net.Sockets.TcpClient
+    try {
+        $f15TcpTask = $f15Tcp.ConnectAsync($SourceHost, 5432)
+        if (-not $f15TcpTask.Wait(10000) -or -not $f15Tcp.Connected) { throw 'SOURCE_POOLER_NETWORK_UNREACHABLE' }
+    } catch { throw 'SOURCE_POOLER_NETWORK_UNREACHABLE' } finally { $f15Tcp.Dispose() }
+
+    Write-F15Progress 'awaiting_secure_password'
+    Write-Host 'Connection address and verified TLS are prepared. Enter ONLY your Store B database password below.'
+    Write-Host 'Nothing you type will appear. Press Enter when finished. Do not type the password into ChatGPT.'
+    Write-Host 'The password immediately starts the authorized read-only backup and LOCAL restore.'
+    $f15Password = Read-F15HiddenPassword
+    $f15Evidence.credential_received = $true
+    $f15SecretPointer = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($f15Password)
+    $f15Plaintext = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($f15SecretPointer)
+    [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($f15SecretPointer)
+    $f15SecretPointer = [IntPtr]::Zero
+
+    Write-F15Progress 'source_manifest_before_dump'
+    $f15Before = Get-F15SourceManifest $f15Plaintext
+    $f15Evidence.source_before = $f15Before
+    $f15Evidence.pooler_backend_ssl_observed = $f15Before.connection_ssl
+    Write-F15Progress 'source_manifest_before_dump'
+    Assert-F15SourceIdentity $f15Before
+    $f15SecretUrl = 'postgresql://postgres.thuyrlepavzdgkvdzuos:' + [Uri]::EscapeDataString($f15Plaintext) + '@' + $SourceHost + ':5432/postgres?sslmode=verify-full'
+    $f15TotalClock = [Diagnostics.Stopwatch]::StartNew()
+    $f15BackupClock = [Diagnostics.Stopwatch]::StartNew()
+    $f15Evidence.dump_start_utc = [DateTime]::UtcNow.ToString('o')
+    foreach ($f15DumpName in @('roles.sql','schema.sql','data.sql')) {
+        Write-F15Progress ('dump_' + $f15DumpName)
+        $f15DumpPath = Join-Path $f15TemporaryDirectory $f15DumpName
+        $f15DumpArguments = @('db','dump','--db-url',$f15SecretUrl,'--file',$f15DumpPath,'--workdir',$f15LocalWork,'--log-level','none')
+        if ($f15DumpName -eq 'roles.sql') { $f15DumpArguments += '--role-only' }
+        if ($f15DumpName -eq 'data.sql') { $f15DumpArguments += @('--data-only','--use-copy','-x','storage.buckets_vectors','-x','storage.vector_indexes') }
+        $f15ArtifactStart = [DateTime]::UtcNow.ToString('o')
+        $f15ArtifactClock = [Diagnostics.Stopwatch]::StartNew()
+        $f15DumpResult = Invoke-F15Native -Executable $f15Cli -Arguments $f15DumpArguments -ChildEnvironment @{SUPABASE_USE_SLIM_IMAGES='false'; PGSSLROOTCERT=$f15CertificatePath; PGPASSFILE=$f15UnusedPasswordFile}
+        $f15DumpArguments = $null
+        Assert-F15NativeSuccess $f15DumpResult ('dump_'+$f15DumpName)
+        $f15ArtifactClock.Stop()
+        if (-not (Test-Path -LiteralPath $f15DumpPath -PathType Leaf) -or (Get-Item -LiteralPath $f15DumpPath).Length -eq 0) { throw 'REQUIRED_DUMP_MISSING_OR_ZERO_BYTES' }
+        $f15Evidence.artifacts += [ordered]@{ filename=$f15DumpName; bytes=(Get-Item -LiteralPath $f15DumpPath).Length; sha256=(Get-FileHash -LiteralPath $f15DumpPath -Algorithm SHA256).Hash.ToLowerInvariant(); start_utc=$f15ArtifactStart; finish_utc=[DateTime]::UtcNow.ToString('o'); seconds=$f15ArtifactClock.Elapsed.TotalSeconds; exit_code=0 }
+        $f15DumpResult = $null
+        Write-Host ($f15DumpName + ' completed; contents are not displayed.')
+    }
+    $f15BackupClock.Stop()
+    $f15Evidence.dump_finish_utc = [DateTime]::UtcNow.ToString('o')
+    $f15Evidence.backup_seconds = $f15BackupClock.Elapsed.TotalSeconds
+    Write-F15Progress 'source_manifest_after_dump'
+    $f15After = Get-F15SourceManifest $f15Plaintext
+    $f15Evidence.source_after = $f15After
+    Assert-F15SourceIdentity $f15After
+    if ((Get-F15ComparableManifest $f15Before $true) -cne (Get-F15ComparableManifest $f15After $true) -or $f15Before.server_version -cne $f15After.server_version) { throw 'SOURCE_MANIFEST_CHANGED_DURING_BACKUP' }
+    $f15Password.Dispose(); $f15Password = $null
+    $f15Plaintext = $null; $f15SecretUrl = $null
+    $f15Evidence.credential_disposed = $true
+    $f15Evidence.dump_coverage = [ordered]@{}
+    foreach ($f15DumpName in @('roles.sql','schema.sql','data.sql')) { $f15Evidence.dump_coverage[$f15DumpName] = Get-F15DumpCoverage (Join-Path $f15TemporaryDirectory $f15DumpName) }
+    $f15Evidence.vault_contract = 'Vault credential recovery is not established by the ordinary logical database backup. External integrations requiring Vault credentials must reconnect after disaster recovery.'
+
+    Write-F15Progress 'isolated_local_restore'
+    $f15Evidence.restore_start_utc = [DateTime]::UtcNow.ToString('o')
+    $f15RestoreClock = [Diagnostics.Stopwatch]::StartNew()
+    $f15RestoreAttempted = $true
+    $f15RestoreResult = Invoke-F15Native $f15Docker @('run','--rm','--network',('container:'+$f15Container),'-e','PGPASSWORD=postgres','--mount',('type=bind,source='+$f15TemporaryDirectory+',target=/f15,readonly'),'--entrypoint','psql',$f15Image,'-h','127.0.0.1','-U','supabase_admin','-d','postgres','-X','-q','--single-transaction','-v','ON_ERROR_STOP=1','-v','VERBOSITY=sqlstate','-v','SHOW_CONTEXT=never','--file','/f15/roles.sql','--file','/f15/schema.sql','--command','SET session_replication_role = replica','--file','/f15/data.sql','--command','SET session_replication_role = origin')
+    Assert-F15NativeSuccess $f15RestoreResult 'isolated_local_restore'
+    $f15RestoreResult = $null
+    $f15RestoreClock.Stop()
+    $f15Evidence.restore_finish_utc = [DateTime]::UtcNow.ToString('o')
+    $f15Evidence.restore_seconds = $f15RestoreClock.Elapsed.TotalSeconds
+
+    Write-F15Progress 'privacy_safe_parity_verification'
+    $f15VerifyClock = [Diagnostics.Stopwatch]::StartNew()
+    $f15ManifestSql = [IO.File]::ReadAllText($f15Query)
+    $f15LocalManifestResult = Invoke-F15Native -Executable $f15Docker -Arguments @('exec','-i',$f15Container,'psql','-U','supabase_admin','-d','postgres','-X','-qAt','-v','ON_ERROR_STOP=1','-v','VERBOSITY=sqlstate','-v','SHOW_CONTEXT=never','--file','-') -InputText $f15ManifestSql
+    Assert-F15NativeSuccess $f15LocalManifestResult 'local_manifest'
+    $f15Restored = $f15LocalManifestResult.Output | ConvertFrom-Json
+    $f15Evidence.restored_manifest = $f15Restored
+    if ($f15Restored.server_version -ne '17.11') { throw 'SOURCE_RESTORED_PARITY_MISMATCH' }
+    # An actual original-expression reparse is required for minor-version CHECK
+    # formatting. The helper verifies every other field and rolls probes back.
+    Write-F15Progress 'constraint_reparse_verification'
+    $f15CanonicalResult = Invoke-F15Native -Executable $PythonPath -Arguments @((Join-Path $PSScriptRoot 'verify-constraint-parity.py'),'--progress',$f15ProgressPath,'--query',$f15Query,'--container',$f15Container)
+    Assert-F15NativeSuccess $f15CanonicalResult 'constraint_reparse_verification'
+    $f15CanonicalEvidence = [IO.File]::ReadAllText($f15ProgressPath) | ConvertFrom-Json
+    if ($f15CanonicalEvidence.ordinary_database_parity -ne $true) { throw 'SOURCE_RESTORED_PARITY_MISMATCH' }
+    $f15Evidence.constraint_semantic_verification = $f15CanonicalEvidence.constraint_semantic_verification
+
+    $f15VerifyClock.Stop(); $f15TotalClock.Stop()
+    $f15Evidence.verification_start_utc = $f15CanonicalEvidence.verification_start_utc
+    $f15Evidence.verification_finish_utc = [DateTime]::UtcNow.ToString('o')
+    $f15Evidence.verification_seconds = $f15VerifyClock.Elapsed.TotalSeconds
+    $f15Evidence.total_backup_restore_verification_seconds = $f15TotalClock.Elapsed.TotalSeconds
+    $f15Evidence.ordinary_database_parity = $true
+    $f15Evidence.vault_source_rows = $f15Before.vault_rows
+    $f15Evidence.vault_restored_rows = $f15Restored.vault_rows
+    $f15Evidence.production_storage_byte_recovery = 'actual production object-byte recovery: N/A — source contained zero objects'
+    $f15Evidence.status = 'REAL_STORE_B_PARITY_PASSED_REMAINING_F15_QUALIFICATION_REQUIRED'
+    Write-F15Progress 'real_store_b_parity_passed'
+    Write-Host 'Real Store B backup, local restore and ordinary database parity passed.' -ForegroundColor Green
+    Write-Host 'F15 remains OPEN pending Storage-byte, Store A, harness, mutation and repository validation.'
+} catch {
+    $f15Evidence.status = 'F15_OPEN_REAL_QUALIFICATION_INCOMPLETE'
+    $f15Evidence.error_code = 'FAIL_CLOSED_' + $f15Evidence.phase
+    $f15Evidence.error_type = $_.Exception.GetType().FullName
+    $f15Evidence.script_line = $_.InvocationInfo.ScriptLineNumber
+    $f15KnownCodes = @('NATIVE_PROCESS_START_FAILED','NATIVE_PROCESS_TIMEOUT','NATIVE_COMMAND_FAILED','PROTECTED_WORKSPACE_PATH_REJECTED','PROTECTED_WORKSPACE_ACL_FAILED','INTERACTIVE_TERMINAL_REQUIRED','CREDENTIAL_ENTRY_CANCELLED','SOURCE_MANIFEST_FORMAT_REJECTED','SOURCE_AUTHORITY_MISMATCH','SOURCE_VERSION_OR_SSL_MISMATCH','SOURCE_CLIENT_TLS_NOT_VERIFIED','NONZERO_PRODUCTION_STORAGE_REQUIRES_SEPARATE_BYTE_RECOVERY','CLI_VERSION_MISMATCH','TELEMETRY_MUST_BE_DISABLED','LOCAL_DOCKER_CONTEXT_MISMATCH','LOCAL_TARGET_NOT_EMPTY_OR_WRONG_VERSION','SELF_TEST_CLIENT_RESULT_MISMATCH','SELF_TEST_COVERAGE_RESULT_MISMATCH','SOURCE_POOLER_HOST_REJECTED','SOURCE_POOLER_NETWORK_UNREACHABLE','SOURCE_CA_OR_DUMP_IMAGE_MISMATCH','REQUIRED_DUMP_MISSING_OR_ZERO_BYTES','SOURCE_MANIFEST_CHANGED_DURING_BACKUP','SOURCE_RESTORED_PARITY_MISMATCH')
+    if ($f15KnownCodes -contains $_.Exception.Message) { $f15Evidence.error_code = $_.Exception.Message }
+    Write-Host 'F15 OPEN — real backup/restore qualification incomplete' -ForegroundColor Yellow
+    Write-Host 'The drill stopped. Only redacted status is saved; native error output is not displayed.'
+    if ($f15Evidence.native_failure_class) {
+        Write-Host ('Reason: ' + $f15Evidence.native_failure_class)
+    }
+    if ($SelfTest) {
+        $f15ProgressPath = Join-Path $f15Root 'F15-Operator-Self-Test.json'
+        Write-F15Progress 'self_test_failed'
+        exit 1
+    }
+} finally {
+    if ($null -ne $f15Password) { $f15Password.Dispose(); $f15Password = $null }
+    if ($f15SecretPointer -ne [IntPtr]::Zero) { [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($f15SecretPointer); $f15SecretPointer = [IntPtr]::Zero }
+    $f15Plaintext = $null; $f15SecretUrl = $null
+    $f15Evidence.credential_disposed = $true
+    if (-not $SelfTest) {
+        # No approved retention: discard ONLY this task's exact local clone and
+        # GUID-named protected SQL directory, even when the drill fails.
+        try {
+            if ($f15OwnDumpClients) {
+                $f15PendingClients = Invoke-F15Native $f15Docker @('ps','-aq','--filter',('ancestor='+$f15DumpImage))
+                Assert-F15NativeSuccess $f15PendingClients 'dump_client_cleanup'
+                foreach ($f15ClientId in ($f15PendingClients.Output -split "`r?`n")) {
+                    if (-not $f15ClientId.Trim()) { continue }
+                    if ($f15ClientId -notmatch '^[a-f0-9]{12,64}$') { throw 'DUMP_CLIENT_ID_REJECTED' }
+                    Assert-F15NativeSuccess (Invoke-F15Native $f15Docker @('rm','-f',$f15ClientId)) 'dump_client_cleanup'
+                }
+            }
+            if ($f15RestoreAttempted) {
+                Assert-F15NativeSuccess (Invoke-F15Native $f15Docker @('rm','-f',$f15Container)) 'local_copy_cleanup'
+                Assert-F15NativeSuccess (Invoke-F15Native $f15Docker @('volume','rm',$f15Container)) 'local_volume_cleanup'
+            }
+            if ($f15TemporaryDirectory -and [IO.Directory]::Exists($f15TemporaryDirectory)) {
+                $f15CleanupPath = [IO.Path]::GetFullPath($f15TemporaryDirectory)
+                $f15TempParent = [IO.Path]::GetFullPath((Join-Path $env:LOCALAPPDATA 'Temp'))
+                if ([IO.Path]::GetDirectoryName($f15CleanupPath) -ne $f15TempParent -or [IO.Path]::GetFileName($f15CleanupPath) -notmatch '^GlamGenius-F15-Recovery-[a-f0-9]{32}$') { throw 'PROTECTED_WORKSPACE_PATH_REJECTED' }
+                foreach ($f15CleanupFile in [IO.Directory]::GetFiles($f15CleanupPath)) {
+                    if ([IO.Path]::GetFileName($f15CleanupFile) -notin @('roles.sql','schema.sql','data.sql')) { throw 'UNEXPECTED_PRIVATE_ARTIFACT' }
+                    [IO.File]::Delete($f15CleanupFile)
+                }
+                [IO.Directory]::Delete($f15CleanupPath,$false)
+            }
+            $f15Evidence.private_artifacts_removed = $true
+        } catch {
+            $f15Evidence.status = 'F15_OPEN_PRIVATE_ARTIFACT_CLEANUP_FAILED'
+            $f15Evidence.private_artifacts_removed = $false
+        }
+        Write-F15Progress $f15Evidence.phase
+        if ($f15Evidence.status -like 'F15_OPEN*') { [Environment]::Exit(1) }
+        [Environment]::Exit(0)
+    }
+    # The launched terminal exits with this script. No secret-bearing shell remains.
+}

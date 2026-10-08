@@ -98,11 +98,13 @@ customer impact, rollback proof, cost and owner without blame.
 **NOW:** Git proves migration upgrade/check/round-trip in disposable CI
 PostgreSQL. That is **not** a production backup or a restore drill.
 [Current recovery qualification status](BACKUP_RESTORE_QUALIFICATION.md)
-records the 2026-10-08 read-only Free-plan/provider preflight and the blocked
-local execution environment. **F15 OPEN — real backup/restore qualification
-incomplete.** No production dump, isolated restore, Auth/Storage recovery or
-source/restored parity was achieved. No guaranteed production RPO, measured
-RTO or recovery SLA is claimed. Paid PITR and paid restore destinations are
+records the executed 2026-10-08 live-source dump → isolated PG17.11 restore
+and ordinary database parity, measured durations and local synthetic Storage/
+Store A recovery. F15 still requires independent closure review. Live production
+`d0e1f2g3h4` intentionally predates undeployed repository `o3p4q5r6s7` because
+Render auto-deploy is OFF. Vault credentials require reconnection; hosted Auth
+signing/provider configuration and existing-session validity remain separate
+recovery boundaries. No guaranteed production RPO/RTO or recovery SLA is claimed. Paid PITR and paid restore destinations are
 prohibited under the current allowance. The old draft
 `docs/production/BACKUP_AND_RESTORE_DRILL.md` remains historical/unverified;
 the fake-success simulator was removed. Neither is successful restore proof.
@@ -169,7 +171,7 @@ is incomplete; `Monitored` means code controls exist but live proof is needed.
 | 1 Product Truth or Store A/B corruption | Constitution, ODbL wall/tests; likelihood unknown, critical impact. | Golden/evidence/license tests and incidents → fail closed, independent review; any breach immediate. | Science + data / monitored. |
 | 2 Founder key-person/access loss | Solo operating model; likelihood unknown, critical recovery impact. | Access inventory/failed handover → private succession and second authorized operator before paid commitments. | Founder / open. |
 | 3 Free single web instance/quotas | One free Render service, no SLA; likelihood unknown, high availability impact. | Readiness, provider status, error-budget burn → approve paid compute after measured harm/PMF. | Founder + platform / monitored. |
-| 4 Store B connection ceiling/restore gap | Pool max 10/process; no verified production backup drill; likelihood unknown, high impact. | Pool/lock/restore exercise → optimize, budget connections, then tier/backup. | Data + platform / open. |
+| 4 Store B connection ceiling/restore gap | Pool max 10/process; dated ordinary logical restore qualified; recurring backup/service-authority recovery remains a gap; likelihood unknown, high impact. | Pool/lock/restore exercise → optimize, budget connections, then tier/backup. | Data + platform / open. |
 | 5 Multi-replica limiter mismatch/B2B abuse | In-process limits; one process now; likelihood conditional, high contractual/security impact. | Replica plan, 429 fairness and usage → shared admission **before** replica 2. | Security + B2B / open future gate. |
 | 6 Deletion/privacy backlog | HTTP Cron, persisted deletion state; likelihood unknown, critical privacy impact. | Cron HTTP + heartbeat + oldest job → improve cycle, then separate executor when lag breaches objective. | Privacy + platform / monitored. |
 | 7 Scheduler/notification dependency | Supabase Cron/pg_net/Vault and Expo Push; likelihood unknown, medium/high impact. | Missed run, send/lag metrics → recover schedule/provider; no late catch-up. | Reliability / monitored. |
@@ -178,7 +180,7 @@ is incomplete; `Monitored` means code controls exist but live proof is needed.
 | 10 Node-forge expiry | Exact governed exception expires 2026-10-16; certain deadline, security/CI impact. | Scheduled audit gate and 2026-10-09 review → official fix/removal; never extend silently. | Security / open time-bound. |
 | 11 B2B credential/support/enterprise gap | V1 key/quota design, no external SLA; likelihood conditional, high contract impact. | Key events/usage and client pipeline → rotation, support and readiness evidence before commitments. | B2B + security / open. |
 | 12 Observability gap | Sentry crash-only; no production SLO baseline; likelihood unknown, medium response impact. | Incident detection delay → low-cardinality safe metrics first. | Reliability + privacy / open. |
-| 13 Storage/media growth and recovery | Supabase private storage, no verified restore; likelihood unknown, high privacy impact. | Bytes/age/deletion drill → retention and funded recovery policy after counsel review. | Privacy + data / open. |
+| 13 Storage/media growth and recovery | Supabase private storage, live zero objects and synthetic local byte restore only; likelihood unknown, high privacy impact. | Bytes/age/deletion drill → retention and funded recovery policy after counsel review. | Privacy + data / open. |
 
 ## Architecture decision record template and gates
 
