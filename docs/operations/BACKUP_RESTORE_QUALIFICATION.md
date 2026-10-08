@@ -147,12 +147,30 @@ No PostgreSQL regression was skipped. The final normal-durability rerun
 passed the complete Vault file again (**16 tests, 2 warnings**, `21.67s`)
 and the invite follow-up again (**17 tests, 2 warnings**, `60.56s`).
 
-No push, PR or production mutation has been made. The correction remains
-uncommitted at the required starting HEAD. An unintended local Git-fixture
-commit was recovered as described below; no delivery commit is claimed.
-**F14 correction implemented — ready for independent review.** F14 is NOT
-declared closed; independent review and eventual exact-head GitHub
-qualification remain required.
+### Current publication and F14 review authority
+
+The implementation was published in [draft PR #221](https://github.com/blazebrt/GlamGenius/pull/221).
+Publication commit: `587e8f26223f69be29901e843aaae452a7dba43d`; publication
+tree: `970338b02074784c8dfed1b35c708df6c145d492`; exact parent/base:
+`83d9f758a1c59be591958c437cff116e436696c6`. The PR remains
+**DRAFT / OPEN / UNMERGED**. The recovered local Git-fixture incident below
+is historical qualification evidence, not an unpublished delivery state.
+
+[Exact-head CI #906 / run 37763125254](https://github.com/blazebrt/GlamGenius/actions/runs/37763125254)
+completed **SUCCESS** for that publication commit/tree. Canonical backend:
+**8158 passed, 1 skipped, 140 warnings**; invite-required follow-up:
+**17 passed, 2 warnings**. The PR gate passed, and Gitleaks reported
+**no leaks found**. These results qualify the implementation publication
+head; any later docs-only correction requires its own scope-selected
+exact-head CI and must not be described as a new backend-suite run.
+
+Independent ChatGPT exact-tree review accepted the F14 transaction
+implementation. The only review correction requested was this stale-status
+documentation update; no F14 application code or tests are changed by it.
+**F14 implementation independently accepted — formal closure pending merge
+and post-merge push qualification.** F14 is not declared closed: formal
+closure requires the approved tree to merge and the subsequent full push CI
+to succeed. This PR is not merge-authorized, and F15 remains OPEN.
 
 ### Qualification environment failures and final isolated Linux result
 
@@ -290,7 +308,9 @@ was checked; no provider upgrade or configuration change was performed.
   Future dumps belong only in protected temporary operator storage, never Git,
   public/shared CI artifacts, chat or shared buckets. Never print credentials.
 
-F14's retained transaction failure has a locally qualified correction; the
-complete isolated Linux suite passed as recorded above. Independent review
-remains required, and F14 is not declared closed. F15 remains OPEN.
-**DO NOT MERGE — awaiting independent ChatGPT review.**
+F14's retained transaction correction passed independent implementation
+review and publication-head CI #906 as recorded above. Formal F14 closure
+still requires merge and successful post-merge full push qualification; the
+docs-only status correction awaits final re-review. F15 remains OPEN, and
+Lane 6 is not complete.
+**DO NOT MERGE — awaiting independent ChatGPT final F14 re-review.**
