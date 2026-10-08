@@ -21,6 +21,9 @@ discrepancy; an old document never authorizes a change to Product Truth.
    not deployment authority or permission to execute Phase B. Raj must
    separately and explicitly authorize any Phase B action. [Scale readiness and SLOs](../operations/SCALE_READINESS_AND_SLOS.md)
    governs planning targets and incident/restore maturity, not current SLAs.
+   [Current recovery qualification status](../operations/BACKUP_RESTORE_QUALIFICATION.md)
+   records the Lane 6 read-only preflight and explicit F15 OPEN blocker; it is
+   not evidence of a completed production backup/restore.
 4. Domain-specific current authorities below explain one boundary; they do not
    override code, Constitution or operations.
 5. Roadmaps, V3 plans and old reports describe intent or history, never current
@@ -56,7 +59,9 @@ discrepancy; an old document never authorizes a change to Product Truth.
   split. **Marked historical**. The current ODbL wall and code prevail.
 - `docs/production/BACKUP_AND_RESTORE_DRILL.md` is an unexecuted draft that
   assumes paid PITR. **Marked historical / unverified**; current backup/restore
-  evidence and future targets are tracked in scale readiness.
+  evidence is tracked in [current recovery qualification status](../operations/BACKUP_RESTORE_QUALIFICATION.md)
+  (F15 OPEN), with future targets in scale readiness. The old fake-success
+  simulator was removed; no real restore was performed in the blocked preflight.
 - Other occurrences of `Mongo`, `Celery`, `Redis`, old navigation and
   `release.yml` in phase/stabilisation reports are **historical citations**, not
   live instructions. They remain linked here instead of being mass-deleted.
