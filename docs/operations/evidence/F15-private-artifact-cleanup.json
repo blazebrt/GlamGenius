@@ -1,0 +1,9 @@
+{
+  "password_process_terminated": true,
+  "protected_sql_files_removed": true,
+  "production_copy_container_removed": true,
+  "production_copy_volume_removed": true,
+  "local_restore_image_retained": true,
+  "hosted_projects_changed": false,
+  "completed_at_utc": "2026-10-08T17:09:09.5683857Z"
+}

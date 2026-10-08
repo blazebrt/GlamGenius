@@ -1,0 +1,38 @@
+import hashlib
+import json
+from pathlib import Path
+
+root = Path(__file__).resolve().parents[2]
+live = json.loads((root / 'outputs/F15-Real-Drill-Progress.json').read_text(encoding='utf-8-sig'))
+cleanup = json.loads((root / 'outputs/F15-Private-Artifact-Cleanup.json').read_text(encoding='utf-8-sig'))
+assert live['ordinary_database_parity'] and all(cleanup[k] for k in ('password_process_terminated','protected_sql_files_removed','production_copy_container_removed','production_copy_volume_removed'))
+
+def digest(value):
+    return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(',', ':'), ensure_ascii=False).encode()).hexdigest()
+
+def safe_manifest(manifest):
+    result = {key: manifest[key] for key in ('server_version','database','schema_context','alembic_heads','public_tables','public_table_counts','auth_users','storage_buckets','storage_objects','vault_rows','external_integrations','off_schema_present','later_label_report_resources_present','extensions','sorted_primary_id_sha256')}
+    for key in ('public_indexes','public_constraints'):
+        result[key] = {'count':len(manifest[key]),'canonical_json_sha256':digest(manifest[key])}
+    return result
+
+evidence = {
+    'evidence_kind':'executed read-only live Store B dump / disposable local restore',
+    'source_project_ref':live['source_project_ref'], 'production_application_commit':live['production_commit'],
+    'render_auto_deploy':'OFF', 'repository_base':live['repository_main'],
+    'repository_head':live['repository_expected_head'], 'cli_version':live['cli_version'],
+    'source_client_tls_verified':live['source_client_tls_verified'], 'source_client_tls_mode':live['source_tls_mode'],
+    'pooler_backend_ssl_is_not_client_tls':True, 'source_default_transaction_read_only':True,
+    'production_mutation':False, 'artifacts':live['artifacts'],
+    'source_before':safe_manifest(live['source_before']), 'source_after':safe_manifest(live['source_after']),
+    'restored':safe_manifest(live['restored_manifest']), 'constraint_reparse':live['constraint_semantic_verification'],
+    'ordinary_database_parity':True, 'dump_coverage':live['dump_coverage'],
+    'vault_contract':live['vault_contract'], 'hosted_auth_authority_proven':False,
+    'production_storage_byte_recovery':live['production_storage_byte_recovery'],
+    'measurements': {k:live[k] for k in ('dump_start_utc','dump_finish_utc','backup_seconds','restore_start_utc','restore_finish_utc','restore_seconds','verification_start_utc','verification_finish_utc','verification_seconds','total_backup_restore_verification_seconds','total_duration_includes_constraint_diagnostic_and_reverification')},
+    'cleanup':cleanup, 'guaranteed_rpo_or_rto':False,
+}
+path=root / 'work/GlamGenius-f15/docs/operations/evidence/F15-2026-10-08.json'
+path.parent.mkdir(parents=True,exist_ok=True)
+path.write_text(json.dumps(evidence,indent=2,ensure_ascii=False)+'\n',encoding='utf-8')
+print(json.dumps({'evidence_bytes':path.stat().st_size,'artifact_count':len(evidence['artifacts']),'public_tables':len(evidence['source_before']['public_tables']),'constraints':evidence['constraint_reparse']['source_constraint_count'],'ordinary_parity':True,'no_private_workspace_path': 'protected_workspace' not in evidence}))

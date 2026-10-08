@@ -384,13 +384,60 @@ It validates the entire artifact before acquiring its guarded Store A
 session, locks an empty target, and imports atomically. Restored `fetched_at`
 is NULL/unknown, not the recovery time. No Store B session is acquired.
 
+### Exact execution provenance and reusable operator
+
+The October 8 qualification was a multi-stage executed recovery proof. The
+historical live operator performed the read-only Store B dump and isolated
+restore but failed closed on raw PG17.6/17.11 CHECK-definition differences and
+did not remove private SQL/local-copy artifacts itself. A separately executed
+CHECK-reparse verification established canonical equality for all 43 differing
+CHECK definitions and rolled its probes back. A separately executed cleanup
+removed the protected SQL workspace and local production-copy container/volume.
+The later reusable operator incorporates both verification and cleanup but was
+not rerun against production.
+
+Historical operator performed credential/process cleanup but did not perform SQL workspace or local production-copy container/volume cleanup. Those artifacts were removed by a separately executed post-drill cleanup step.
+
+The [provenance manifest](evidence/F15-provenance.json) binds exact SHA-256 and
+byte counts for the [executed historical operator](evidence/F15-executed-live-operator-2026-10-08.ps1.txt),
+[executed CHECK helper](evidence/F15-executed-constraint-reparse-2026-10-08.py.txt),
+[original CHECK result](evidence/F15-constraint-reparse-verification.json),
+[separate cleanup record](evidence/F15-private-artifact-cleanup.json),
+the public source TLS CA and the original privacy-safe evidence exporter.
+The source-manifest SQL and TLS Dockerfile are byte-for-byte identical to their
+existing committed files; their paths and hashes are bound without duplicate
+historical copies. The historical CHECK helper differs from the later reusable
+helper and is preserved independently. Snapshot bytes are protected from Git
+newline conversion. These historical `.txt` files are review evidence; do not
+execute them as the current operator.
+
+The [current local absence check](evidence/F15-current-local-absence-2026-10-09.json)
+verified the exact recorded SQL workspace, container/volume names, dump-image
+clients and credential-process PIDs without contacting production. After the
+original cleanup, an empty PG17 target had been recreated under the same name.
+That replacement was verified to contain zero public tables, Auth users,
+Storage buckets/objects and Vault rows, then removed with its task-owned volume
+so those names are currently absent. Unrelated local resources were untouched.
+This is current cleanup-state verification, not a second production drill.
+
+The accepted parity proof still contains 509 constraints: 466 unchanged raw
+definitions and the separately verified 43 canonical CHECK definitions. The
+original operator's refusal is part of this evidence chain; it is not reported
+as automatic canonical-parity success or private-artifact cleanup.
+
+No guaranteed production RTO is currently claimed. These executed observations
+and provenance records do not authorize migration, deployment or finding closure.
+
 ### Reviewable operator and fail-closed tests
 
 [`Invoke-StoreB-Drill.ps1`](../../scripts/f15/Invoke-StoreB-Drill.ps1) is the
-parameterized Windows operator derived from the executed local script. Its
-PG-minor constraint handling is the reviewed form of the separately executed
-verification helper. The refactor's self-test checks local prerequisites;
-the live backup was not repeated after credential destruction.
+parameterized Windows operator derived from the executed local script. It
+incorporates the previously separate CHECK verification and implements live-run
+private-artifact cleanup in `finally`. Its PG-minor constraint handling is the
+reviewed form of the separately executed verification helper. The refactor was
+syntax-checked and self-tested locally only; it did not execute the recorded
+production dump/restore, and the live backup was not repeated after credential
+destruction.
 [`safe-source-manifest.sql`](../../scripts/f15/safe-source-manifest.sql)
 queries aggregates/IDs-as-digests only, under a read-only transaction.
 [`verify-constraint-parity.py`](../../scripts/f15/verify-constraint-parity.py)

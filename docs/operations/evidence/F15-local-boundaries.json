@@ -33,7 +33,7 @@
     "workspace_current_user_only": true
   },
   "executed_live_operator_source_sha256": "a07f2cc68743d4fdeae961310bcaa2f5e381437ddb0d87b3005a3153bec66df2",
-  "note": "The parameterized Windows refactor was tested without a source connection or password. The real source drill was not repeated.",
+  "note": "The accepted live recovery was multi-stage: historical source operator and raw parity refusal, separate CHECK reparse, then separate private-artifact cleanup. The later parameterized Windows operator was syntax/self-tested locally only. The real source drill was not repeated.",
   "synthetic_postgres_server": {
     "version_major": 16,
     "memory_backed_data_directory": true,
@@ -41,5 +41,13 @@
     "synchronous_commit": false,
     "full_page_writes": false,
     "crash_durability_proven": false
-  }
+  },
+  "executed_live_operator_source_path": "docs/operations/evidence/F15-executed-live-operator-2026-10-08.ps1.txt",
+  "provenance_manifest_path": "docs/operations/evidence/F15-provenance.json",
+  "historical_operator_private_artifact_cleanup": false,
+  "cleanup_executed_separately": true,
+  "constraint_reparse_executed_separately": true,
+  "current_local_absence_reverified": true,
+  "current_reusable_operator_path": "scripts/f15/Invoke-StoreB-Drill.ps1",
+  "current_reusable_operator_executed_against_production": false
 }

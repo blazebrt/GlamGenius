@@ -1,4 +1,5 @@
 """Status guards only; these tests must never be described as a restore drill."""
+import hashlib
 import json
 from pathlib import Path
 
@@ -31,3 +32,49 @@ def test_recovery_authority_distinguishes_executed_live_drill_and_development_he
         assert "BACKUP_RESTORE_QUALIFICATION.md" in (ROOT / path).read_text(encoding="utf-8")
     historical = (ROOT / "docs/production/BACKUP_AND_RESTORE_DRILL.md").read_text(encoding="utf-8")
     assert "HISTORICAL / UNVERIFIED" in historical
+    provenance = json.loads((ROOT / "docs/operations/evidence/F15-provenance.json").read_text(encoding="utf-8"))
+    live = provenance["live_operator"]
+    assert live["executed_against_production"] is True
+    assert live["performed_read_only_dump"] is True and live["performed_isolated_local_restore"] is True
+    assert live["completed_final_canonical_constraint_parity_by_itself"] is False
+    assert live["raw_constraint_comparison_failed_closed"] is True
+    assert live["credential_process_cleanup"] is True and live["private_artifact_cleanup"] is False
+    assert live["sha256"] == "a07f2cc68743d4fdeae961310bcaa2f5e381437ddb0d87b3005a3153bec66df2"
+    assert provenance["constraint_reparse"]["executed_separately_after_raw_mismatch"] is True
+    assert provenance["constraint_reparse"]["original_check_definitions_reparsed"] == 43
+    assert provenance["constraint_reparse"]["transaction_rolled_back"] is True
+    assert provenance["constraint_reparse"]["restored_catalog_rechecked_unchanged"] is True
+    assert provenance["cleanup"]["executed_separately"] is True
+    assert provenance["cleanup"]["current_absence_reverified"] is True
+    reusable = provenance["reusable_operator"]
+    assert reusable["executed_against_production"] is False
+    assert reusable["selftest_passed"] is True
+    assert reusable["includes_cleanup_finally"] is True and reusable["includes_constraint_reparse"] is True
+    assert provenance["production_rerun_performed_for_provenance_correction"] is False
+    assert provenance["production_write_performed_for_provenance_correction"] is False
+    assert provenance["vault_credential_recovery_proven"] is False
+    assert provenance["hosted_auth_authority_proven"] is False
+    assert provenance["guaranteed_production_rpo"] is False and provenance["guaranteed_production_rto"] is False
+    assert "multi-stage executed recovery proof" in qualification
+    assert "No guaranteed production RTO is currently claimed" in qualification
+    bindings = [provenance[key] for key in (
+        "live_operator", "source_manifest_helper", "dump_image_authority", "public_tls_certificate",
+        "constraint_reparse", "cleanup_record", "evidence_export_transformer", "reusable_operator",
+    )]
+    bindings += [provenance["constraint_reparse"]["evidence"], provenance["constraint_reparse"]["current_reusable_helper"],
+                 provenance["cleanup"]["current_absence_evidence"]]
+    for binding in bindings:
+        raw = (ROOT / binding["path"]).read_bytes()
+        assert len(raw) == binding["bytes"]
+        assert hashlib.sha256(raw).hexdigest() == binding["sha256"]
+    assert provenance["source_manifest_helper"]["historical_bytes_match_committed"] is True
+    assert provenance["dump_image_authority"]["historical_bytes_match_committed"] is True
+    assert provenance["constraint_reparse"]["historical_bytes_match_current_reusable_helper"] is False
+    absence = json.loads((ROOT / provenance["cleanup"]["current_absence_evidence"]["path"]).read_text(encoding="utf-8-sig"))
+    assert all(absence[field] is True for field in (
+        "historical_workspace_absent", "historical_sql_files_absent", "historical_container_absent",
+        "historical_volume_absent", "current_absence_reverified",
+    ))
+    assert absence["historical_dump_clients_remaining"] == 0
+    assert all(process["absent"] is True for process in absence["recorded_credential_processes"])
+    assert absence["production_connection_performed"] is False and absence["production_write"] is False

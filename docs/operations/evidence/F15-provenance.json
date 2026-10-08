@@ -1,0 +1,136 @@
+{
+  "schema_version": 1,
+  "evidence_kind": "Multi-stage executed October 8 recovery proof; provenance correction only",
+  "historical_production_application_commit": "27f1df4a08f17321cba21b95a00a65b37ea5ce5a",
+  "source_project_ref": "thuyrlepavzdgkvdzuos",
+  "source_and_restored_alembic_head": "d0e1f2g3h4",
+  "repository_development_alembic_head": "o3p4q5r6s7",
+  "live_operator": {
+    "path": "docs/operations/evidence/F15-executed-live-operator-2026-10-08.ps1.txt",
+    "sha256": "a07f2cc68743d4fdeae961310bcaa2f5e381437ddb0d87b3005a3153bec66df2",
+    "bytes": 29773,
+    "executed_against_production": true,
+    "performed_read_only_dump": true,
+    "performed_isolated_local_restore": true,
+    "completed_final_canonical_constraint_parity_by_itself": false,
+    "private_artifact_cleanup": false,
+    "credential_process_cleanup": true,
+    "raw_constraint_comparison_failed_closed": true,
+    "cleanup_contract": "Historical operator performed credential/process cleanup but did not perform SQL workspace or local production-copy container/volume cleanup. Those artifacts were removed by a separately executed post-drill cleanup step."
+  },
+  "source_manifest_helper": {
+    "path": "scripts/f15/safe-source-manifest.sql",
+    "sha256": "e6c250bca77dde2c963c793795a0fac2455a8ca97f5677f30b0ac18f47f7a0ec",
+    "bytes": 4260,
+    "historical_bytes_match_committed": true,
+    "byte_identity": "historical execution bytes == committed bytes",
+    "execution": "Read-only source before/after and local restored manifests"
+  },
+  "dump_image_authority": {
+    "path": "scripts/f15/Dockerfile.dump-tls",
+    "sha256": "6591b0aa555a89ac0c2a20a5aeefcfccffde66b34177d9f9964b2db98dd8cef6",
+    "bytes": 352,
+    "historical_bytes_match_committed": true,
+    "byte_identity": "historical execution bytes == committed bytes",
+    "local_image": "public.ecr.aws/supabase/postgres:17.11.0.004-f15-tls-20261008",
+    "local_image_id": "sha256:afeb281c749d2637851439e6266abd1a1e1cbab7c3245d093783355776a89d8d",
+    "local_image_created_at_utc": "2026-10-08T16:32:30.657779934Z",
+    "base_image_digest": "sha256:06ddc7962e11ab0f4f0334fd05671e97c30ea202f6e6a7113800bd3d6e416108",
+    "source_client_tls_mode": "verify-full",
+    "source_default_transaction_read_only": true
+  },
+  "public_tls_certificate": {
+    "path": "docs/operations/evidence/F15-source-public-tls-ca-2026-10-08.crt.txt",
+    "sha256": "700723581420dd1ac98fd7e9ac529f0ef210eadcaf87fc868a3ad7d114c2f3b7",
+    "bytes": 1367,
+    "kind": "Public Supabase source TLS CA certificate",
+    "official_url": "https://supabase-downloads.s3-ap-southeast-1.amazonaws.com/prod/ssl/prod-ca-2021.crt",
+    "build_context_certificate_sha256": "700723581420dd1ac98fd7e9ac529f0ef210eadcaf87fc868a3ad7d114c2f3b7",
+    "private_key_present": false
+  },
+  "constraint_reparse": {
+    "path": "docs/operations/evidence/F15-executed-constraint-reparse-2026-10-08.py.txt",
+    "sha256": "e6d99292798d73d59ac0b7cfb6b7877625b05fbf4a5837f3403d9aa9f3b91fd9",
+    "bytes": 7981,
+    "executed_against_production": false,
+    "executed_separately_after_raw_mismatch": true,
+    "historical_bytes_match_current_reusable_helper": false,
+    "current_reusable_helper": {
+      "path": "scripts/f15/verify-constraint-parity.py",
+      "sha256": "53dedd0f73c54e094b99f5850a34190e4e9678bb3fa2d22fc76946a3c8cacb60",
+      "bytes": 8380
+    },
+    "source_constraint_count": 509,
+    "unchanged_definition_count": 466,
+    "original_check_definitions_reparsed": 43,
+    "all_canonical_definitions_equal": true,
+    "transaction_rolled_back": true,
+    "restored_catalog_rechecked_unchanged": true,
+    "evidence": {
+      "path": "docs/operations/evidence/F15-constraint-reparse-verification.json",
+      "sha256": "ba7f62267198ff5903bd99937ebdd13cd5886ebaf7164404fc6a49ef76cbb6dd",
+      "bytes": 14267
+    }
+  },
+  "cleanup_record": {
+    "path": "docs/operations/evidence/F15-private-artifact-cleanup.json",
+    "sha256": "4dbc3d268fb416536cb69ae373d5336092b7db8f07e40878d56b685b7f1fb41f",
+    "bytes": 307,
+    "kind": "Exact original aggregate cleanup record; separate local tool/shell step, not predecessor source",
+    "completed_at_utc": "2026-10-08T17:09:09.5683857Z"
+  },
+  "cleanup": {
+    "executed_separately": true,
+    "current_absence_reverified": true,
+    "sql_workspace_removed": true,
+    "local_production_copy_container_removed": true,
+    "local_production_copy_volume_removed": true,
+    "no_retained_production_rows": true,
+    "current_absence_evidence": {
+      "path": "docs/operations/evidence/F15-current-local-absence-2026-10-09.json",
+      "sha256": "3ef0f57b2721e0a2ebc273efd6d426198d2d8bf57490d850d883ab292f9ab8dd",
+      "bytes": 1855
+    },
+    "same_name_empty_replacement_removed_after_zero_count_verification": true
+  },
+  "evidence_export_transformer": {
+    "path": "docs/operations/evidence/F15-executed-evidence-export-2026-10-08.py.txt",
+    "sha256": "8c1083e76e58ad22e7c0c36ddf718c89557530e45808de4e6e91ee7eba5f0aa8",
+    "bytes": 3243,
+    "executed_against_production": false,
+    "kind": "Original local privacy-safe evidence export transformer",
+    "source_inputs": "Post-drill aggregate progress and separate cleanup records; no source DB connection or SQL dump read"
+  },
+  "reusable_operator": {
+    "path": "scripts/f15/Invoke-StoreB-Drill.ps1",
+    "sha256": "857c0fd56ab0c4f523c923ea5980a46f665f5ab1ece83bdb3dfc123054bee53c",
+    "bytes": 34148,
+    "executed_against_production": false,
+    "selftest_passed": true,
+    "includes_cleanup_finally": true,
+    "includes_constraint_reparse": true,
+    "historical_production_drill_repeated_after_refactor": false
+  },
+  "historical_external_tools": {
+    "supabase_cli": {
+      "version": "2.120.0",
+      "executable_sha256": "1cbedd6e494581a1c1d90113660113a06798d9967d19c857127b66b8a428e836",
+      "role": "Three real read-only PG17 containerized dump invocations"
+    },
+    "source_metadata_psql": {
+      "version": "16.15",
+      "executable_sha256": "4d77c3479f5cebd0cd761154c4e02a34a005d2728a249fbc9ecb4bdac1519f07",
+      "role": "Read-only aggregate queries; not the dump/restore engine"
+    },
+    "postgres_restore": {
+      "version": "17.11",
+      "image_digest": "sha256:06ddc7962e11ab0f4f0334fd05671e97c30ea202f6e6a7113800bd3d6e416108"
+    }
+  },
+  "production_rerun_performed_for_provenance_correction": false,
+  "production_write_performed_for_provenance_correction": false,
+  "vault_credential_recovery_proven": false,
+  "hosted_auth_authority_proven": false,
+  "guaranteed_production_rpo": false,
+  "guaranteed_production_rto": false
+}
