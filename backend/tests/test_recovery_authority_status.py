@@ -12,7 +12,22 @@ def test_historical_zero_byte_simulator_is_no_longer_an_executable_success_path(
 
 def test_recovery_authority_distinguishes_executed_live_drill_and_development_head():
     qualification = (ROOT / "docs/operations/BACKUP_RESTORE_QUALIFICATION.md").read_text(encoding="utf-8")
-    assert "F15 READY FOR INDEPENDENT CLOSURE REVIEW" in qualification or "F15 OPEN — real backup/restore qualification incomplete" in qualification
+    durable_authority = " ".join(qualification.split())
+    assert durable_authority.count("F15 recovery qualification is complete.") == 2
+    closure_boundary = (
+        "Formal finding closure is determined by repository exact-tree merge/post-merge CI authority "
+        "and is recorded by the audit closure process, not inferred from this document alone."
+    )
+    assert durable_authority.count(closure_boundary) == 2
+    for transient_status in (
+        "F15 awaits independent closure review",
+        "F15 READY FOR INDEPENDENT CLOSURE REVIEW",
+        "F15 OPEN — real backup/restore qualification incomplete",
+        "F15 CLOSED",
+        "Only a DRAFT PR may publish this change",
+        "DO NOT MERGE",
+    ):
+        assert transient_status not in durable_authority
     assert "Live production is intentionally behind repository main because Render auto-deploy is OFF." in qualification
     assert "d0e1f2g3h4" in qualification and "o3p4q5r6s7" in qualification
     assert "Vault credential recovery is not established" in qualification

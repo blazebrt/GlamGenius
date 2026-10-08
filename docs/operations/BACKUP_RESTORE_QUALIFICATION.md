@@ -1,8 +1,10 @@
 # Backup / restore qualification — current evidence
 
 **Authority: F14 historical implementation/evidence and the dated, executed
-F15 live-source recovery evidence below. F01–F14 are CLOSED. F15 awaits
-independent closure review; no finding is closed by this document alone.**
+F15 live-source recovery evidence below. F01–F14 are CLOSED.
+F15 recovery qualification is complete. Formal finding closure is determined by
+repository exact-tree merge/post-merge CI authority and is recorded by the audit
+closure process, not inferred from this document alone.**
 
 Starting main: `83d9f758a1c59be591958c437cff116e436696c6`, tree
 `4971fe9d830ddf594cbb5cba5b2ca7730c278e30`. Audit Lane 6 addresses F14/F15
@@ -268,9 +270,12 @@ not a real Supabase Vault encryption test or any F15 recovery evidence.
 
 ## F15 — real live-source recovery, 2026-10-08 UTC
 
-**F15 READY FOR INDEPENDENT CLOSURE REVIEW.** Ordinary live database parity
-and the required local recovery/implementation checks passed. This is readiness
-for independent review, not finding closure, merge or deployment authorization.
+**F15 recovery qualification is complete. Formal finding closure is determined
+by repository exact-tree merge/post-merge CI authority and is recorded by the
+audit closure process, not inferred from this document alone.**
+
+Ordinary live database parity and the required local recovery/implementation
+checks passed. Qualification does not authorize merge or deployment.
 
 Machine-readable evidence: [live drill](evidence/F15-2026-10-08.json),
 [local boundaries](evidence/F15-local-boundaries.json), [validation](evidence/F15-validation.json)
@@ -511,8 +516,6 @@ The earlier partial full run was interrupted after 1820 passing tests to
 qualify the final immutable source snapshot; it is not a complete-suite result.
 Current complete results are in the validation evidence linked above.
 
-Only a DRAFT PR may publish this change. Exact-head CI run/status and the
-review/comment/thread snapshot belong to its publication report. No result
+Exact-head CI run/status and the review/comment/thread snapshot belong to
+the publication report. No result
 from an earlier F14 SHA is treated as CI evidence for the F15 head.
-
-DO NOT MERGE — awaiting independent ChatGPT review
