@@ -1,6 +1,7 @@
 # Backup / restore qualification — current evidence
 
-**CURRENT status authority; NOT a successful recovery qualification.**
+**Authority: durable F14 implementation/evidence; dated publication/review
+checkpoints; CURRENT F15 status. NOT a successful recovery qualification.**
 
 Starting main: `83d9f758a1c59be591958c437cff116e436696c6`, tree
 `4971fe9d830ddf594cbb5cba5b2ca7730c278e30`. Audit Lane 6 addresses F14/F15
@@ -147,30 +148,48 @@ No PostgreSQL regression was skipped. The final normal-durability rerun
 passed the complete Vault file again (**16 tests, 2 warnings**, `21.67s`)
 and the invite follow-up again (**17 tests, 2 warnings**, `60.56s`).
 
-### Current publication and F14 review authority
+### Durable F14 implementation qualification
 
-The implementation was published in [draft PR #221](https://github.com/blazebrt/GlamGenius/pull/221).
-Publication commit: `587e8f26223f69be29901e843aaae452a7dba43d`; publication
-tree: `970338b02074784c8dfed1b35c708df6c145d492`; exact parent/base:
-`83d9f758a1c59be591958c437cff116e436696c6`. The PR remains
-**DRAFT / OPEN / UNMERGED**. The recovered local Git-fixture incident below
-is historical qualification evidence, not an unpublished delivery state.
+**F14 implementation qualification is complete. Formal finding closure is
+determined by repository merge/post-merge CI authority and is recorded by the
+audit closure process, not inferred from this document alone.**
 
-[Exact-head CI #906 / run 37763125254](https://github.com/blazebrt/GlamGenius/actions/runs/37763125254)
-completed **SUCCESS** for that publication commit/tree. Canonical backend:
-**8158 passed, 1 skipped, 140 warnings**; invite-required follow-up:
-**17 passed, 2 warnings**. The PR gate passed, and Gitleaks reported
-**no leaks found**. These results qualify the implementation publication
-head; any later docs-only correction requires its own scope-selected
-exact-head CI and must not be described as a new backend-suite run.
+Independent exact-tree review accepted the transaction behavior, PostgreSQL
+SAVEPOINT semantics, retained credential authority and privacy retry tests
+described above. The immutable publication commit/tree and qualification
+runs are recorded in the dated checkpoint below. Formal closure uses Git
+merge-tree integrity and successful post-merge full push CI, not mutable
+PR-state prose in this document. Neither implementation qualification nor
+finding closure supplies production backup/restore evidence for F15.
 
-Independent ChatGPT exact-tree review accepted the F14 transaction
-implementation. The only review correction requested was this stale-status
-documentation update; no F14 application code or tests are changed by it.
-**F14 implementation independently accepted — formal closure pending merge
-and post-merge push qualification.** F14 is not declared closed: formal
-closure requires the approved tree to merge and the subsequent full push CI
-to succeed. This PR is not merge-authorized, and F15 remains OPEN.
+### Publication/review checkpoint — 2026-10-08
+
+This dated checkpoint records historical publication/review evidence, not
+live PR state or a current formal-closure decision.
+
+At this checkpoint, [PR #221](https://github.com/blazebrt/GlamGenius/pull/221)
+was **DRAFT / OPEN / UNMERGED**. Its implementation publication commit was
+`587e8f26223f69be29901e843aaae452a7dba43d`, tree
+`970338b02074784c8dfed1b35c708df6c145d492`, with exact parent/base
+`83d9f758a1c59be591958c437cff116e436696c6`. The prior stale-status docs
+correction head was `d47fa8edf816cdab62bc61aae48de2310d44cbb7`, tree
+`d6372d63025b886d35ccdbd0259100c30ab9bb18`, with the publication commit
+as its exact parent. The recovered local Git-fixture incident below was
+historical qualification evidence, not an unpublished delivery state.
+
+[CI #906 / run 37763125254](https://github.com/blazebrt/GlamGenius/actions/runs/37763125254)
+qualified the implementation publication head, and
+[CI #907 / run 37767788110](https://github.com/blazebrt/GlamGenius/actions/runs/37767788110)
+qualified the docs-corrected head. Both completed **SUCCESS** with canonical
+backend **8158 passed, 1 skipped, 140 warnings** and invite-required
+follow-up **17 passed, 2 warnings**. Both PR gates passed, and Gitleaks
+reported **no leaks found**. These immutable run results are not a claim
+that CI ran on any later head.
+
+Independent ChatGPT review had accepted the F14 implementation and the
+prior stale-status documentation correction. F15 remained OPEN, with no
+production-source backup/restore qualification established at that
+checkpoint.
 
 ### Qualification environment failures and final isolated Linux result
 
@@ -248,6 +267,8 @@ not a real Supabase Vault encryption test or any F15 recovery evidence.
 
 ## F15 — blocked at the secure-execution preflight
 
+**F15 OPEN — real Store B backup/restore qualification incomplete.**
+
 This desktop is founder-local, but a usable production Store B database URL/
 password is **not configured** in the checked process settings or local
 project environment files. Read-only provider SQL access does not supply a
@@ -308,9 +329,6 @@ was checked; no provider upgrade or configuration change was performed.
   Future dumps belong only in protected temporary operator storage, never Git,
   public/shared CI artifacts, chat or shared buckets. Never print credentials.
 
-F14's retained transaction correction passed independent implementation
-review and publication-head CI #906 as recorded above. Formal F14 closure
-still requires merge and successful post-merge full push qualification; the
-docs-only status correction awaits final re-review. F15 remains OPEN, and
-Lane 6 is not complete.
-**DO NOT MERGE — awaiting independent ChatGPT final F14 re-review.**
+F14 implementation qualification and formal finding closure are separate
+authorities, as defined above. F15 remains OPEN: the historical evidence in
+this document does not establish real Store B recovery or complete Lane 6.
