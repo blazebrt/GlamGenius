@@ -313,6 +313,10 @@ async def confirm_label(
         )
         output.verification_status = VERIFICATION_USER_CONFIRMED
     else:
+        service.assert_label_confirmation_replay_matches(
+            event, device_id=device.id, account_id=current.account_id,
+            barcode=body.barcode, ai_run_id=body.ai_run_id, facts=facts,
+        )
         record = await service._own_record(session, body.barcode)
         if record is None:  # defensive: an older malformed event must not gain confidence
             raise ValidationFailedError("The original confirmation has no stored label fact.")

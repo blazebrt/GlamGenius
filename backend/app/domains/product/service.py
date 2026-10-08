@@ -51,7 +51,8 @@ from app.domains.product.models import (
 )
 from app.shared.database.base import new_uuid, utcnow
 from app.shared.database.sql import get_sessionmaker
-from app.shared.errors.exceptions import MediaTooLargeError
+from app.shared.errors.codes import ErrorCode
+from app.shared.errors.exceptions import AppError, MediaTooLargeError
 from app.shared.validation.media import validate_upload
 
 logger = logging.getLogger(__name__)
@@ -638,6 +639,41 @@ async def record_scan(
             raise
         return winner, False
     return event, True
+
+
+def assert_label_confirmation_replay_matches(
+    event: ScanEvent,
+    *,
+    device_id: uuid.UUID,
+    account_id: uuid.UUID,
+    barcode: str,
+    ai_run_id: uuid.UUID,
+    facts: dict[str, Any],
+) -> None:
+    """Food confirmation policy, including a concurrent insert's stored winner.
+
+    Generic scan idempotency only resolves the key; it grants no authority to
+    replace its original evidence. Facts are the complete server-validated
+    transcription, compared structurally (JSON object order is immaterial).
+    This check runs before any confidence, snapshot or AI-output write.
+    """
+    fields = (
+        ("device_id", event.device_id, device_id),
+        ("account_id", event.account_id, account_id),
+        ("barcode", event.barcode, barcode),
+        ("outcome", event.outcome, OUTCOME_LABEL),
+        ("ai_run_id", event.ai_run_id, ai_run_id),
+        ("label_facts", event.label_facts, facts),
+    )
+    for field, stored, incoming in fields:
+        if stored != incoming:
+            raise AppError(
+                "This capture id has already been used for a different label.",
+                status_code=409,
+                code=ErrorCode.CONFLICT,
+                retryable=False,
+                extra={"conflicting_field": field},
+            )
 
 
 async def attach_scans_to_account(
