@@ -299,6 +299,77 @@ async def test_missing_google_vault_secret_retries_integration_stage(
         )).scalar_one_or_none() is None
 
 
+async def test_vault_deletion_failure_blocks_account_erasure_until_retry_succeeds(
+    db_clean, fake_admin, fake_storage, monkeypatch,
+):
+    """A confirmed provider revocation is not proof that its credential is gone."""
+    from app.domains.identity.models import Account
+
+    class DeleteFailureStore(InMemoryCredentialStore):
+        fail_delete = True
+        delete_attempts = 0
+
+        async def delete(self, reference):
+            self.delete_attempts += 1
+            if self.fail_delete:
+                raise RuntimeError("synthetic Vault deletion failure")
+            await super().delete(reference)
+
+    account_id = uuid.uuid4()
+    reference = "memory:delete-failure"
+    store = DeleteFailureStore({reference: "LOCAL_SYNTHETIC_REFRESH"})
+
+    async def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200)
+
+    monkeypatch.setattr(calendar_sync, "credential_store", lambda _session: store)
+    monkeypatch.setattr(
+        calendar_sync, "GoogleCalendarProvider",
+        lambda credential_store: GoogleCalendarProvider(
+            credential_store, transport=httpx.MockTransport(handler),
+        ),
+    )
+    factory = get_sessionmaker()
+    async with factory() as session:
+        await identity.register_account(session, account_id)
+        session.add(ExternalIntegration(
+            account_id=account_id, kind="calendar", provider="google",
+            status="connected", credential_ref=reference,
+        ))
+        await deletion_service.request_deletion(session, account_id)
+        await session.commit()
+
+    async with factory() as session:
+        assert await deletion_service.process_once(session) is True
+        await session.commit()
+        job = await deletion_service.get_job(session, account_id)
+        assert job.state == STATE_FAILED_RETRYABLE
+        assert job.last_error_stage == "integrations_deleting"
+        assert job.completed_at is None
+        assert fake_admin.deleted_users == []
+        assert (await session.execute(select(Account).where(Account.id == account_id))).scalar_one() is not None
+        integration = (await session.execute(select(ExternalIntegration).where(
+            ExternalIntegration.account_id == account_id,
+        ))).scalar_one()
+        assert integration.status == "revocation_pending"
+        assert integration.credential_ref == reference
+        assert store.delete_attempts == 1
+        assert await store.read(reference) == "LOCAL_SYNTHETIC_REFRESH"
+
+        store.fail_delete = False
+        job.next_retry_at = None
+        await session.commit()
+        await deletion_service.drain_all(session)
+        await session.commit()
+        job = await deletion_service.get_job(session, account_id)
+        assert job.state == STATE_COMPLETE
+        assert job.completed_at is not None
+        assert store.delete_attempts == 2
+        assert await store.read(reference) is None
+        assert fake_admin.deleted_users == [str(account_id)]
+        assert (await session.execute(select(Account).where(Account.id == account_id))).scalar_one_or_none() is None
+
+
 async def test_supabase_auth_deletion_happens_last(db_clean, fake_admin, fake_storage):
     """Supabase Auth deletion must not run until database cleanup succeeded.
 

@@ -83,7 +83,12 @@ class SupabaseVaultCredentialStore:
         return credential_ref
 
     async def delete(self, credential_ref: str) -> None:
-        await self.session.execute(text("SELECT vault.delete_secret(CAST(:id AS uuid))"), {"id": self._id(credential_ref)})
+        secret_id = self._id(credential_ref)
+        async with self.session.begin_nested():
+            await self.session.execute(
+                text("DELETE FROM vault.secrets WHERE id = CAST(:id AS uuid)"),
+                {"id": secret_id},
+            )
 
 
 def credential_store(session: AsyncSession) -> CalendarCredentialStore:

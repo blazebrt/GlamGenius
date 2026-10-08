@@ -96,19 +96,22 @@ customer impact, rollback proof, cost and owner without blame.
 ## Continuity, backup and restore
 
 **NOW:** Git proves migration upgrade/check/round-trip in disposable CI
-PostgreSQL. That is **not** a production backup or a restore drill. No
-provider-side backup policy, PITR, Storage restore, Auth recovery, RPO or RTO
-has been verified here. The old draft `docs/production/BACKUP_AND_RESTORE_DRILL.md`
-explicitly logged live restore as incomplete and must not be cited as proof.
-Record actual current Supabase plan, backup/export/retention and legal limits
-from the provider dashboard in a private operator record before promising
-recovery. Do not run a production dump in Step 18.
+PostgreSQL. That is **not** a production backup or a restore drill.
+[Current recovery qualification status](BACKUP_RESTORE_QUALIFICATION.md)
+records the 2026-10-08 read-only Free-plan/provider preflight and the blocked
+local execution environment. **F15 OPEN — real backup/restore qualification
+incomplete.** No production dump, isolated restore, Auth/Storage recovery or
+source/restored parity was achieved. No guaranteed production RPO, measured
+RTO or recovery SLA is claimed. Paid PITR and paid restore destinations are
+prohibited under the current allowance. The old draft
+`docs/production/BACKUP_AND_RESTORE_DRILL.md` remains historical/unverified;
+the fake-success simulator was removed. Neither is successful restore proof.
 
 **NEXT — trigger required:** before a paid enterprise SLA or critical paid
 product, obtain approved backup/restore capability for Store B, physically
-separate Store A, Auth and Storage. Propose RPO/RTO per domain *after* impact
-analysis (illustrative planning targets: Store B RPO ≤24h/RTO ≤24h for an
-early paid stage; tighter values require measured need and provider quote).
+separate Store A, Auth and Storage. Propose RPO/RTO per domain only *after*
+impact analysis and a real measured qualification; illustrative schedules
+must not be reported as guarantees.
 Test restoration into an isolated, authorized non-production environment:
 checksum/schema/seed, account/privacy state, Store A wall, key and media
 access, and service startup at an exact compatible SHA. Record drill date,
