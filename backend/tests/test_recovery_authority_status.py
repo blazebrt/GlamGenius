@@ -13,7 +13,10 @@ def test_historical_zero_byte_simulator_is_no_longer_an_executable_success_path(
 def test_recovery_authority_distinguishes_executed_live_drill_and_development_head():
     qualification = (ROOT / "docs/operations/BACKUP_RESTORE_QUALIFICATION.md").read_text(encoding="utf-8")
     durable_authority = " ".join(qualification.split())
-    assert durable_authority.count("F15 recovery qualification is complete.") == 2
+    assert durable_authority.count("F15 remains open pending corrective recovery qualification.") == 2
+    assert "F15 OPEN — post-merge review remediation incomplete" in durable_authority
+    assert "full contents of every public table and complete column-definition parity were not measured" in durable_authority
+    assert "potentially exposed pending authorized rotation" in durable_authority
     closure_boundary = (
         "Formal finding closure is determined by repository exact-tree merge/post-merge CI authority "
         "and is recorded by the audit closure process, not inferred from this document alone."
@@ -78,8 +81,14 @@ def test_recovery_authority_distinguishes_executed_live_drill_and_development_he
     )]
     bindings += [provenance["constraint_reparse"]["evidence"], provenance["constraint_reparse"]["current_reusable_helper"],
                  provenance["cleanup"]["current_absence_evidence"]]
+    correction = json.loads((ROOT / "docs/operations/evidence/F15-review-remediation-2026-10-09.json").read_text(encoding="utf-8"))
+    preserved = correction["preserved_source_bindings"]
+    assert correction["all_seven_findings_independently_accepted"] is True
+    assert correction["fresh_production_drill_performed"] is False
+    assert correction["rotation_authorized"] is False
     for binding in bindings:
-        raw = (ROOT / binding["path"]).read_bytes()
+        historical_path = preserved.get(binding["path"], {}).get("path", binding["path"])
+        raw = (ROOT / historical_path).read_bytes()
         assert len(raw) == binding["bytes"]
         assert hashlib.sha256(raw).hexdigest() == binding["sha256"]
     assert provenance["source_manifest_helper"]["historical_bytes_match_committed"] is True

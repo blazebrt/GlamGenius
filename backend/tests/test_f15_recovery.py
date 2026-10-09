@@ -3,7 +3,11 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
+import subprocess
 import sys
+import time
+import uuid
 from copy import deepcopy
 from datetime import UTC, datetime
 
@@ -27,6 +31,8 @@ def manifest():
                   auth_users=0, storage_buckets=1, storage_objects=0, external_integrations=0,
                   off_schema_present=False, later_label_report_resources_present=False,
                   sorted_primary_id_sha256={"synthetic": hashlib.sha256(b"1").hexdigest()}, vault_rows=2)
+    result["public_columns"] = [{"schema": "public", "table": "synthetic", "column": "id", "attnum": 1}]
+    result["public_table_content_sha256"] = {"synthetic": hashlib.sha256(b"synthetic full row").hexdigest()}
     return result
 
 
@@ -235,18 +241,44 @@ def ensure_test_database(name):
 
 @pytest_asyncio.fixture
 async def separate_store_a(monkeypatch):
-    """A distinct, disposable local database, never the Store B fallback."""
+    """A physically distinct disposable PostgreSQL cluster, not another database."""
     main_url = make_url(config.POSTGRES_URL)
     assert main_url.host in {"localhost", "127.0.0.1", "::1"}
-    target = main_url.set(database="f15_store_a", drivername="postgresql+asyncpg")
-    ensure_test_database("f15_store_a")
+    owned = None
+    target_setting = os.environ.get("F15_LOCAL_STORE_A_URL")
+    if not target_setting:
+        owned = "glamgenius-f15-test-storea-" + uuid.uuid4().hex
+        subprocess.run(["docker", "run", "-d", "--name", owned, "--label", "glamgenius.f15.synthetic=true",
+                        "-p", "127.0.0.1::5432", "-e", "POSTGRES_USER=postgres", "-e", "POSTGRES_PASSWORD=postgres",
+                        "postgres:16.6-alpine"], capture_output=True, check=True, timeout=120)
+        port = recovery.run_checked(["docker", "inspect", "--format",
+                                     '{{(index (index .NetworkSettings.Ports "5432/tcp") 0).HostPort}}', owned]).strip()
+        target_setting = f"postgresql+asyncpg://postgres:postgres@127.0.0.1:{int(port)}/postgres"
+    target = make_url(target_setting)
+    assert target.host in {"localhost", "127.0.0.1", "::1"}
+    # Test fixture only: measured Store B identity, never acquired by importer.
+    url = main_url.set(drivername="postgresql", password=None)
+    env = dict(os.environ, PGPASSWORD=main_url.password or "")
+    system_id = recovery.run_checked(["psql", "-X", "-qAt", "--dbname", url.render_as_string(hide_password=False),
+                                     "-c", "SELECT system_identifier::text FROM pg_control_system()"], environment=env).strip()
     await store.dispose_off_engine()
     monkeypatch.setattr(config, "OFF_DATABASE_URL", target.render_as_string(hide_password=False))
-    await store.create_off_schema()
-    async with store.get_off_engine().begin() as connection:
-        await connection.execute(text("TRUNCATE off_data.off_products"))
-    yield
-    await store.dispose_off_engine()
+    try:
+        for attempt in range(30):
+            try:
+                await store.create_off_schema()
+                break
+            except OSError:
+                if attempt == 29:
+                    raise
+                time.sleep(0.2)
+        async with store.get_off_engine().begin() as connection:
+            await connection.execute(text("TRUNCATE off_data.off_products"))
+        yield system_id
+    finally:
+        await store.dispose_off_engine()
+        if owned:
+            subprocess.run(["docker", "rm", "-f", "-v", owned], capture_output=True, check=True, timeout=60)
 
 
 @pytest.mark.asyncio
@@ -267,7 +299,7 @@ async def test_store_a_export_destroy_recreate_import_actual_parity_and_unknown_
     async with engine.connect() as connection:
         assert (await connection.execute(text("SELECT to_regclass('off_data.off_products')"))).scalar() is None
     await store.create_off_schema()
-    imported = await importer.import_export(tmp_path / "before")
+    imported = await importer.import_export(tmp_path / "before", store_b_system_identifier=separate_store_a)
     restored = await export(tmp_path / "after")
     assert original["sha256"] == restored["sha256"] == imported["sha256"]
     assert original["record_count"] == restored["record_count"] == 2
@@ -278,7 +310,7 @@ async def test_store_a_export_destroy_recreate_import_actual_parity_and_unknown_
         assert len(products) == 2
         assert all(product.fetched_at is None for product in products)
     with pytest.raises(importer.InvalidOffExport, match="empty"):
-        await importer.import_export(tmp_path / "before")
+        await importer.import_export(tmp_path / "before", store_b_system_identifier=separate_store_a)
     record_testsuite_property("local_store_a_recovery", json.dumps({"record_count": original["record_count"],
                     "sha256": original["sha256"], "export_destroy_recreate_import_parity": True,
                     "fetched_at": "NULL/unknown", "license": original["license"],

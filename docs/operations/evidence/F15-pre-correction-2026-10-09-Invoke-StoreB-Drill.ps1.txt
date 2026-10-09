@@ -13,7 +13,6 @@ param(
 # Windows operator; read-only live source, disposable LOCAL target only.
 # Never dot-source: process termination is the final credential boundary.
 $ErrorActionPreference = 'Stop'
-. (Join-Path $PSScriptRoot 'Review-Safety.ps1')
 $f15Root = [IO.Path]::GetFullPath($EvidenceDirectory)
 foreach ($f15OperatorDirectory in @($f15Root,[IO.Path]::GetFullPath($LocalWorkDir))) {
     $f15Ancestor = $f15OperatorDirectory
@@ -30,7 +29,7 @@ $f15LocalWork = [IO.Path]::GetFullPath($LocalWorkDir)
 $f15Psql = [IO.Path]::GetFullPath($PsqlPath)
 $f15Docker = (Get-Command docker.exe -ErrorAction Stop).Source
 $f15Container = $ContainerName
-$f15Image = 'public.ecr.aws/supabase/postgres@sha256:06ddc7962e11ab0f4f0334fd05671e97c30ea202f6e6a7113800bd3d6e416108'
+$f15Image = 'public.ecr.aws/supabase/postgres:17.11.0.004'
 $f15DumpImage = 'public.ecr.aws/supabase/postgres:17.11.0.004-f15-tls-20261008'
 $f15CertificatePath = [IO.Path]::GetFullPath($CertificatePath)
 $f15UnusedPasswordFile = Join-Path $f15Root 'no-password-file-for-endpoint-probe'
@@ -39,16 +38,14 @@ $f15RestoreAttempted = $false
 $f15OwnDumpClients = $false
 $f15Password = $null
 $f15Plaintext = $null
-$f15SafeDumpUrl = $null
-$f15Proxy = $null
-$f15DumpImageId = $null
+$f15SecretUrl = $null
 $f15SecretPointer = [IntPtr]::Zero
 $f15TemporaryDirectory = $null
 $f15Evidence = [ordered]@{
     status = 'PREPARING'; phase = 'local_preflight'
     production_commit = '27f1df4a08f17321cba21b95a00a65b37ea5ce5a'
     source_project_ref = 'thuyrlepavzdgkvdzuos'; source_expected_head = 'd0e1f2g3h4'
-    repository_main = 'd7ba6aef68c4656d8d91c4fb6b5fc263653988e5'
+    repository_main = 'f1a2db6dad3f6824a3d24f7f6a6ebcaaf8a1fc4f'
     repository_expected_head = 'o3p4q5r6s7'; credential_disposed = $false; credential_received = $false
     production_mutation = $false; artifacts = @()
 }
@@ -84,9 +81,8 @@ function Invoke-F15Native {
     }
     $f15Child = New-Object Diagnostics.Process
     $f15Child.StartInfo = $f15Start
-    $f15ChildStarted = $false
     try {
-        try { [void]$f15Child.Start(); $f15ChildStarted = $true } catch { throw 'NATIVE_PROCESS_START_FAILED' }
+        try { [void]$f15Child.Start() } catch { throw 'NATIVE_PROCESS_START_FAILED' }
         $f15Start.Arguments = ''
         foreach ($f15EnvironmentKey in $ChildEnvironment.Keys) { $f15Start.EnvironmentVariables.Remove($f15EnvironmentKey) }
         $f15OutputTask = $f15Child.StandardOutput.ReadToEndAsync()
@@ -94,21 +90,14 @@ function Invoke-F15Native {
         if ($null -ne $InputText) { $f15Child.StandardInput.Write($InputText) }
         $f15Child.StandardInput.Close()
         if (-not $f15Child.WaitForExit($TimeoutSeconds * 1000)) {
-            Stop-F15OwnedProcess $f15Child
+            $f15Child.Kill()
+            $f15Child.WaitForExit()
             throw 'NATIVE_PROCESS_TIMEOUT'
         }
-        $f15SafeOutput = $f15OutputTask.Result; $f15SafeError = $f15ErrorTask.Result
-        if ($ChildEnvironment.ContainsKey('PGPASSWORD') -and $ChildEnvironment.PGPASSWORD) {
-            foreach ($f15SecretSpelling in @([string]$ChildEnvironment.PGPASSWORD,[Uri]::EscapeDataString([string]$ChildEnvironment.PGPASSWORD))) {
-                $f15SafeOutput=$f15SafeOutput.Replace($f15SecretSpelling,'[REDACTED]')
-                $f15SafeError=$f15SafeError.Replace($f15SecretSpelling,'[REDACTED]')
-            }
-        }
-        return [pscustomobject]@{ ExitCode = $f15Child.ExitCode; Output = $f15SafeOutput; Error = $f15SafeError }
+        return [pscustomobject]@{ ExitCode = $f15Child.ExitCode; Output = $f15OutputTask.Result; Error = $f15ErrorTask.Result }
     } finally {
         $f15Start.Arguments = ''
         foreach ($f15EnvironmentKey in $ChildEnvironment.Keys) { $f15Start.EnvironmentVariables.Remove($f15EnvironmentKey) }
-        if ($f15ChildStarted -and -not $f15Child.HasExited) { Stop-F15OwnedProcess $f15Child }
         $f15Child.Dispose()
     }
 }
@@ -196,8 +185,7 @@ function Get-F15ComparableManifest($Manifest, [bool]$IncludeVault) {
     $f15Comparison = [ordered]@{}
     foreach ($f15Field in @('database','schema_context','alembic_heads','public_tables','public_table_counts',
         'auth_users','storage_buckets','storage_objects','external_integrations','off_schema_present',
-        'later_label_report_resources_present','extensions','public_indexes','public_constraints','sorted_primary_id_sha256',
-        'public_columns','public_table_content_sha256')) {
+        'later_label_report_resources_present','extensions','public_indexes','public_constraints','sorted_primary_id_sha256')) {
         $f15Comparison[$f15Field] = $Manifest.$f15Field
     }
     if ($IncludeVault) { $f15Comparison['vault_rows'] = $Manifest.vault_rows }
@@ -262,8 +250,7 @@ try {
     if ($f15Context.Output.Trim() -ne 'desktop-linux') { throw 'LOCAL_DOCKER_CONTEXT_MISMATCH' }
     # Never interfere with an existing operator. Only clients created after
     # this empty-client preflight belong to this run's final cleanup.
-    $f15DumpImageId = Assert-F15DumpImage -Docker $f15Docker -Tag $f15DumpImage -Dockerfile (Join-Path $PSScriptRoot 'Dockerfile.dump-tls') -Certificate $f15CertificatePath
-    $f15ExistingClients = Invoke-F15Native $f15Docker @('ps','-aq','--filter',('ancestor='+$f15DumpImageId))
+    $f15ExistingClients = Invoke-F15Native $f15Docker @('ps','-aq','--filter',('ancestor='+$f15DumpImage))
     Assert-F15NativeSuccess $f15ExistingClients 'dump_client_preflight'
     if ($f15ExistingClients.Output.Trim()) { throw 'EXISTING_DUMP_CLIENT_REFUSED' }
     $f15OwnDumpClients = $true
@@ -276,8 +263,6 @@ try {
     if ($f15DumpPin -ne '17.11.0.004-f15-tls-20261008' -or $f15DumpImageEnvironment -notcontains 'PGSSLMODE=verify-full' -or $f15DumpImageEnvironment -notcontains 'PGSSLROOTCERT=/etc/f15/supabase-prod-ca-2021.crt' -or $f15DumpImageEnvironment -notcontains 'PGOPTIONS=-c default_transaction_read_only=on -c statement_timeout=120000') { throw 'SOURCE_CA_OR_DUMP_IMAGE_MISMATCH' }
     $f15Evidence.source_tls_mode = 'verify-full'
     $f15Evidence.dump_image = $f15DumpImage
-    $f15Evidence.dump_image_id = $f15DumpImageId
-    $f15Evidence.embedded_ca_identity_verified = $true
     $f15Evidence.source_default_transaction_read_only = $true
     $f15Evidence.phase = 'local_empty_target'
     $f15LocalResult = Invoke-F15Native $f15Docker @('exec',$f15Container,'psql','-U','supabase_admin','-d','postgres','-X','-qAt','-v','ON_ERROR_STOP=1','-c',"SELECT jsonb_build_object('version',current_setting('server_version'),'public_tables',(SELECT count(*) FROM information_schema.tables WHERE table_schema='public' AND table_type='BASE TABLE'),'auth_users',(SELECT count(*) FROM auth.users),'storage_buckets',(SELECT count(*) FROM storage.buckets),'storage_objects',(SELECT count(*) FROM storage.objects),'vault_rows',(SELECT count(*) FROM vault.secrets))")
@@ -359,24 +344,19 @@ try {
     $f15Evidence.pooler_backend_ssl_observed = $f15Before.connection_ssl
     Write-F15Progress 'source_manifest_before_dump'
     Assert-F15SourceIdentity $f15Before
-    $f15SafeDumpUrl = 'postgresql://postgres.thuyrlepavzdgkvdzuos@' + $SourceHost + ':5432/postgres?sslmode=verify-full'
-    $f15Proxy = Start-F15PinnedDockerProxy -Python $PythonPath -DockerPipe '\\.\pipe\dockerDesktopLinuxEngine' -Tag $f15DumpImage -Image $f15DumpImageId
-    $f15Proxy.Process.StandardInput.WriteLine((@{password=$f15Plaintext} | ConvertTo-Json -Compress))
-    $f15Proxy.Process.StandardInput.Flush()
-    $f15ProxyAck = $f15Proxy.Process.StandardOutput.ReadLineAsync()
-    if (-not $f15ProxyAck.Wait(10000) -or $f15ProxyAck.Result -ne 'CREDENTIAL_CHANNEL_READY') { throw 'PINNED_PROXY_CREDENTIAL_FAILED' }
+    $f15SecretUrl = 'postgresql://postgres.thuyrlepavzdgkvdzuos:' + [Uri]::EscapeDataString($f15Plaintext) + '@' + $SourceHost + ':5432/postgres?sslmode=verify-full'
     $f15TotalClock = [Diagnostics.Stopwatch]::StartNew()
     $f15BackupClock = [Diagnostics.Stopwatch]::StartNew()
     $f15Evidence.dump_start_utc = [DateTime]::UtcNow.ToString('o')
     foreach ($f15DumpName in @('roles.sql','schema.sql','data.sql')) {
         Write-F15Progress ('dump_' + $f15DumpName)
         $f15DumpPath = Join-Path $f15TemporaryDirectory $f15DumpName
-        $f15DumpArguments = @('db','dump','--db-url',$f15SafeDumpUrl,'--file',$f15DumpPath,'--workdir',$f15LocalWork,'--log-level','none')
+        $f15DumpArguments = @('db','dump','--db-url',$f15SecretUrl,'--file',$f15DumpPath,'--workdir',$f15LocalWork,'--log-level','none')
         if ($f15DumpName -eq 'roles.sql') { $f15DumpArguments += '--role-only' }
         if ($f15DumpName -eq 'data.sql') { $f15DumpArguments += @('--data-only','--use-copy','-x','storage.buckets_vectors','-x','storage.vector_indexes') }
         $f15ArtifactStart = [DateTime]::UtcNow.ToString('o')
         $f15ArtifactClock = [Diagnostics.Stopwatch]::StartNew()
-        $f15DumpResult = Invoke-F15Native -Executable $f15Cli -Arguments $f15DumpArguments -ChildEnvironment @{PGPASSWORD=$f15Plaintext; DOCKER_HOST=$f15Proxy.Host; DOCKER_CUSTOM_HEADERS=('X-F15-Run='+$f15Proxy.Token); DOCKER_CONTEXT=''; SUPABASE_USE_SLIM_IMAGES='false'; PGSSLROOTCERT=$f15CertificatePath; PGPASSFILE=$f15UnusedPasswordFile}
+        $f15DumpResult = Invoke-F15Native -Executable $f15Cli -Arguments $f15DumpArguments -ChildEnvironment @{SUPABASE_USE_SLIM_IMAGES='false'; PGSSLROOTCERT=$f15CertificatePath; PGPASSFILE=$f15UnusedPasswordFile}
         $f15DumpArguments = $null
         Assert-F15NativeSuccess $f15DumpResult ('dump_'+$f15DumpName)
         $f15ArtifactClock.Stop()
@@ -394,7 +374,7 @@ try {
     Assert-F15SourceIdentity $f15After
     if ((Get-F15ComparableManifest $f15Before $true) -cne (Get-F15ComparableManifest $f15After $true) -or $f15Before.server_version -cne $f15After.server_version) { throw 'SOURCE_MANIFEST_CHANGED_DURING_BACKUP' }
     $f15Password.Dispose(); $f15Password = $null
-    $f15Plaintext = $null; $f15SafeDumpUrl = $null
+    $f15Plaintext = $null; $f15SecretUrl = $null
     $f15Evidence.credential_disposed = $true
     $f15Evidence.dump_coverage = [ordered]@{}
     foreach ($f15DumpName in @('roles.sql','schema.sql','data.sql')) { $f15Evidence.dump_coverage[$f15DumpName] = Get-F15DumpCoverage (Join-Path $f15TemporaryDirectory $f15DumpName) }
@@ -459,75 +439,45 @@ try {
         exit 1
     }
 } finally {
+    if ($null -ne $f15Password) { $f15Password.Dispose(); $f15Password = $null }
+    if ($f15SecretPointer -ne [IntPtr]::Zero) { [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($f15SecretPointer); $f15SecretPointer = [IntPtr]::Zero }
+    $f15Plaintext = $null; $f15SecretUrl = $null
+    $f15Evidence.credential_disposed = $true
     if (-not $SelfTest) {
         # No approved retention: discard ONLY this task's exact local clone and
         # GUID-named protected SQL directory, even when the drill fails.
-        $f15Cleanup = Invoke-F15IndependentCleanup ([ordered]@{
-          dump_clients = {
+        try {
             if ($f15OwnDumpClients) {
-                if ($null -eq $f15Proxy) { return }
-                $f15PendingClients = Invoke-F15Native $f15Docker @('ps','-aq','--filter',('ancestor='+$f15DumpImageId),'--filter',('label=glamgenius.f15.run='+$f15Proxy.Token)) -TimeoutSeconds 30
+                $f15PendingClients = Invoke-F15Native $f15Docker @('ps','-aq','--filter',('ancestor='+$f15DumpImage))
                 Assert-F15NativeSuccess $f15PendingClients 'dump_client_cleanup'
-                $f15ClientFailures = 0
                 foreach ($f15ClientId in ($f15PendingClients.Output -split "`r?`n")) {
                     if (-not $f15ClientId.Trim()) { continue }
                     if ($f15ClientId -notmatch '^[a-f0-9]{12,64}$') { throw 'DUMP_CLIENT_ID_REJECTED' }
-                    try { Assert-F15NativeSuccess (Invoke-F15Native $f15Docker @('rm','-f',$f15ClientId) -TimeoutSeconds 30) 'dump_client_cleanup' } catch { $f15ClientFailures++ }
+                    Assert-F15NativeSuccess (Invoke-F15Native $f15Docker @('rm','-f',$f15ClientId)) 'dump_client_cleanup'
                 }
-                if ($f15ClientFailures) { throw 'OWNED_CLIENT_CLEANUP_FAILED' }
             }
-          }
-          local_container = {
             if ($f15RestoreAttempted) {
-                Assert-F15NativeSuccess (Invoke-F15Native $f15Docker @('rm','-f',$f15Container) -TimeoutSeconds 30) 'local_copy_cleanup'
+                Assert-F15NativeSuccess (Invoke-F15Native $f15Docker @('rm','-f',$f15Container)) 'local_copy_cleanup'
+                Assert-F15NativeSuccess (Invoke-F15Native $f15Docker @('volume','rm',$f15Container)) 'local_volume_cleanup'
             }
-          }
-          local_volume = {
-            if ($f15RestoreAttempted) { Assert-F15NativeSuccess (Invoke-F15Native $f15Docker @('volume','rm',$f15Container) -TimeoutSeconds 30) 'local_volume_cleanup' }
-          }
-          sql_files = {
             if ($f15TemporaryDirectory -and [IO.Directory]::Exists($f15TemporaryDirectory)) {
                 $f15CleanupPath = [IO.Path]::GetFullPath($f15TemporaryDirectory)
                 $f15TempParent = [IO.Path]::GetFullPath((Join-Path $env:LOCALAPPDATA 'Temp'))
                 if ([IO.Path]::GetDirectoryName($f15CleanupPath) -ne $f15TempParent -or [IO.Path]::GetFileName($f15CleanupPath) -notmatch '^GlamGenius-F15-Recovery-[a-f0-9]{32}$') { throw 'PROTECTED_WORKSPACE_PATH_REJECTED' }
-                $f15FileFailures = 0
-                foreach ($f15Name in @('roles.sql','schema.sql','data.sql')) {
-                    try { [IO.File]::Delete((Join-Path $f15CleanupPath $f15Name)) } catch { $f15FileFailures++ }
+                foreach ($f15CleanupFile in [IO.Directory]::GetFiles($f15CleanupPath)) {
+                    if ([IO.Path]::GetFileName($f15CleanupFile) -notin @('roles.sql','schema.sql','data.sql')) { throw 'UNEXPECTED_PRIVATE_ARTIFACT' }
+                    [IO.File]::Delete($f15CleanupFile)
                 }
-                if ($f15FileFailures -or [IO.Directory]::GetFiles($f15CleanupPath).Count -gt 0) { throw 'PRIVATE_FILE_CLEANUP_FAILED' }
-            }
-          }
-          workspace = {
-            if ($f15TemporaryDirectory -and [IO.Directory]::Exists($f15TemporaryDirectory)) {
-                $f15CleanupPath = [IO.Path]::GetFullPath($f15TemporaryDirectory)
-                $f15TempParent = [IO.Path]::GetFullPath((Join-Path $env:LOCALAPPDATA 'Temp'))
-                if ([IO.Path]::GetDirectoryName($f15CleanupPath) -ne $f15TempParent -or [IO.Path]::GetFileName($f15CleanupPath) -notmatch '^GlamGenius-F15-Recovery-[a-f0-9]{32}$') { throw 'PROTECTED_WORKSPACE_PATH_REJECTED' }
                 [IO.Directory]::Delete($f15CleanupPath,$false)
             }
-          }
-          credential_process = {
-            if ($null -ne $f15Password) { $f15Password.Dispose(); $f15Password = $null }
-            if ($f15SecretPointer -ne [IntPtr]::Zero) { [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($f15SecretPointer); $f15SecretPointer = [IntPtr]::Zero }
-            $f15Plaintext = $null; $f15SafeDumpUrl = $null
-            if ($null -ne $f15Proxy) {
-                try { $f15Proxy.Process.StandardInput.Close(); if (-not $f15Proxy.Process.WaitForExit(10000)) { Stop-F15OwnedProcess $f15Proxy.Process } }
-                finally { $f15Proxy.Process.Dispose() }
-            }
-            $f15Evidence.credential_disposed = $true
-          }
-        })
-        $f15Plaintext = $null; $f15SafeDumpUrl = $null; $f15Password = $null; $f15SecretPointer = [IntPtr]::Zero
-        $f15Evidence.cleanup_failures = @($f15Cleanup.Failures)
-        $f15Evidence.private_artifacts_removed = $f15Cleanup.Success
-        if (-not $f15Cleanup.Success) {
+            $f15Evidence.private_artifacts_removed = $true
+        } catch {
             $f15Evidence.status = 'F15_OPEN_PRIVATE_ARTIFACT_CLEANUP_FAILED'
+            $f15Evidence.private_artifacts_removed = $false
         }
         Write-F15Progress $f15Evidence.phase
         if ($f15Evidence.status -like 'F15_OPEN*') { [Environment]::Exit(1) }
         [Environment]::Exit(0)
     }
-    if ($null -ne $f15Password) { $f15Password.Dispose() }
-    if ($f15SecretPointer -ne [IntPtr]::Zero) { [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($f15SecretPointer) }
-    $f15Plaintext = $null; $f15SafeDumpUrl = $null
     # The launched terminal exits with this script. No secret-bearing shell remains.
 }

@@ -8,7 +8,6 @@ import hashlib
 import json
 import re
 import subprocess
-import sys
 import time
 from datetime import UTC, datetime
 from pathlib import Path
@@ -79,7 +78,7 @@ manifest_result = subprocess.run(["docker", "exec", "-i", args.container, "psql"
 if manifest_result.returncode:
     raise SystemExit("LOCAL_MANIFEST_REVERIFICATION_FAILED")
 restored = json.loads(manifest_result.stdout)
-fields = ("database", "schema_context", "alembic_heads", "public_tables", "public_table_counts", "auth_users", "storage_buckets", "storage_objects", "external_integrations", "off_schema_present", "later_label_report_resources_present", "extensions", "public_indexes", "sorted_primary_id_sha256", "public_columns", "public_table_content_sha256")
+fields = ("database", "schema_context", "alembic_heads", "public_tables", "public_table_counts", "auth_users", "storage_buckets", "storage_objects", "external_integrations", "off_schema_present", "later_label_report_resources_present", "extensions", "public_indexes", "sorted_primary_id_sha256")
 for field in fields:
     if evidence["source_before"][field] != restored[field]:
         raise SystemExit("ORDINARY_MANIFEST_PARITY_FAILED: " + field)
@@ -95,7 +94,7 @@ for artifact in evidence["artifacts"]:
         raise SystemExit("BACKUP_ARTIFACT_INTEGRITY_FAILED")
 safe_result = {"schema_artifact_sha256_verified": expected_hash, "source_constraint_count": len(source), "restored_constraint_count": len(target), "unchanged_definition_count": len(source)-len(different), "original_check_definitions_reparsed": len(checks), "all_canonical_definitions_equal": len(checks)==len(different) and all(c["equal"] for c in checks), "transaction_rolled_back": True, "source_database_write": False, "checks": checks}
 (args.progress.parent / 'F15-Constraint-Reparse-Verification.json').write_text(json.dumps(safe_result, indent=2)+"\n", encoding="utf-8")
-sys.stdout.write(json.dumps({k:v for k,v in safe_result.items() if k != "checks"}, indent=2)+'\n')
+print(json.dumps({k:v for k,v in safe_result.items() if k != "checks"}, indent=2))
 if not safe_result["all_canonical_definitions_equal"]:
     raise SystemExit("CANONICAL_CONSTRAINT_PARITY_FAILED")
 verification_finished = datetime.now(UTC)
@@ -111,4 +110,4 @@ evidence.update(restored_manifest=restored, ordinary_database_parity=True,
 for failure_key in ("error_code", "error_type", "script_line"):
     evidence.pop(failure_key, None)
 args.progress.write_text(json.dumps(evidence, indent=2)+"\n", encoding="utf-8")
-sys.stdout.write(json.dumps({"ordinary_parity": True, "verification_seconds": evidence["verification_seconds"], "total_seconds_including_diagnostic": evidence["total_backup_restore_verification_seconds"]})+'\n')
+print(json.dumps({"ordinary_parity": True, "verification_seconds": evidence["verification_seconds"], "total_seconds_including_diagnostic": evidence["total_backup_restore_verification_seconds"]}))

@@ -10,6 +10,7 @@ import argparse
 import asyncio
 import hashlib
 import json
+import re
 from pathlib import Path
 from typing import Any
 
@@ -109,13 +110,29 @@ def _assert_local_separate_target() -> None:
         raise InvalidOffExport("Recovery requires a physically separate local Store A database")
 
 
-async def import_export(directory: Path) -> dict[str, Any]:
+async def import_export(directory: Path, *, store_b_system_identifier: str | None = None) -> dict[str, Any]:
+    """Require independently obtained Store B pg_control metadata, never a Store B session.
+
+    The local operator supplies the system identifier from pg_controldata on
+    the owned Store B cluster. URL spelling and database names cannot establish
+    physical separation. An absent/unavailable authority fails before import.
+    """
     manifest, rows = read_export(directory)
     _assert_local_separate_target()
+    if not isinstance(store_b_system_identifier, str) or not re.fullmatch(r"[1-9][0-9]{9,19}", store_b_system_identifier):
+        raise InvalidOffExport("Verified local Store B cluster authority is required")
     factory = get_off_sessionmaker()
     if factory.kw["bind"].url != make_url(config.OFF_DATABASE_URL):
         raise InvalidOffExport("Cached Store A engine does not match the recovery target")
     async with factory() as session, session.begin():
+        try:
+            connected = (await session.execute(text(
+                "SELECT system_identifier::text FROM pg_control_system()"
+            ))).scalar_one()
+        except Exception:
+            raise InvalidOffExport("Connected Store A cluster authority unavailable") from None
+        if not isinstance(connected, str) or not re.fullmatch(r"[1-9][0-9]{9,19}", connected) or connected == store_b_system_identifier:
+            raise InvalidOffExport("Recovery requires physically separate PostgreSQL clusters")
         # Excludes concurrent writers between the emptiness check and insert.
         await session.execute(text("LOCK TABLE off_data.off_products IN ACCESS EXCLUSIVE MODE"))
         if (await session.execute(select(OffProduct.barcode).limit(1))).first() is not None:
@@ -129,8 +146,10 @@ async def import_export(directory: Path) -> dict[str, Any]:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("directory", type=Path)
+    parser.add_argument("--store-b-system-identifier", required=True,
+                        help="Verified local pg_controldata system identifier; never a connection string")
     args = parser.parse_args()
-    asyncio.run(import_export(args.directory))
+    asyncio.run(import_export(args.directory, store_b_system_identifier=args.store_b_system_identifier))
 
 
 if __name__ == "__main__":

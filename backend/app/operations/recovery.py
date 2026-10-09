@@ -7,6 +7,7 @@ local PostgreSQL commands; they are distinct from the recorded live drill.
 from __future__ import annotations
 
 import hashlib
+import re
 import subprocess
 import time
 from collections.abc import Callable, Mapping, Sequence
@@ -22,6 +23,7 @@ ORDINARY_FIELDS = (
     "auth_users", "storage_buckets", "storage_objects", "external_integrations",
     "off_schema_present", "later_label_report_resources_present", "extensions",
     "public_indexes", "public_constraints", "sorted_primary_id_sha256",
+    "public_columns", "public_table_content_sha256",
 )
 
 
@@ -57,6 +59,29 @@ def artifact(path: Path) -> dict[str, Any]:
 
 
 def assert_manifest_parity(source: Mapping[str, Any], restored: Mapping[str, Any]) -> None:
+    for manifest in (source, restored):
+        tables = manifest.get("public_tables")
+        counts = manifest.get("public_table_counts")
+        digests = manifest.get("public_table_content_sha256")
+        columns = manifest.get("public_columns")
+        if (not isinstance(tables, list) or not all(isinstance(t, str) for t in tables)
+                or len(tables) != len(set(tables)) or not isinstance(counts, dict) or not isinstance(digests, dict)
+                or set(tables) != counts.keys() or set(tables) != digests.keys()
+                or any(not isinstance(count, int) or isinstance(count, bool) or count < 0 for count in counts.values())
+                or any(not isinstance(d, str) or re.fullmatch(r"[0-9a-f]{64}", d) is None for d in digests.values())
+                or not isinstance(columns, list)):
+            raise RecoveryFailed("MANIFEST_MISMATCH")
+        identities = set()
+        column_tables = set()
+        for column in columns:
+            if (not isinstance(column, dict) or column.get("schema") != "public" or column.get("table") not in tables
+                    or not isinstance(column.get("column"), str) or not isinstance(column.get("attnum"), int) or isinstance(column.get("attnum"), bool)
+                    or column["attnum"] < 1 or (column["table"], column["attnum"]) in identities):
+                raise RecoveryFailed("MANIFEST_MISMATCH")
+            identities.add((column["table"], column["attnum"]))
+            column_tables.add(column["table"])
+        if column_tables != set(tables):
+            raise RecoveryFailed("MANIFEST_MISMATCH")
     for field in ORDINARY_FIELDS:
         if field not in source or field not in restored or source[field] != restored[field]:
             raise RecoveryFailed("MANIFEST_MISMATCH")
@@ -66,12 +91,47 @@ def assert_manifest_parity(source: Mapping[str, Any], restored: Mapping[str, Any
 class ByteRecovery:
     bytes: int
     sha256: str
+    source_key_sha256: str
+    source_bytes: int
+    source_sha256: str
+
+
+def assert_storage_proofs(source: Mapping[str, Any], proofs: Sequence[ByteRecovery]) -> None:
+    """Compare recovered objects to an independently measured source manifest."""
+    expected = source.get("storage_byte_manifest", [])
+    count = source["storage_objects"]
+    if not isinstance(expected, list) or len(expected) != count or len(proofs) != count:
+        raise RecoveryFailed("PRODUCTION_OBJECT_BYTE_PROOF_REQUIRED")
+    def valid_digest(value: Any) -> bool:
+        return isinstance(value, str) and re.fullmatch(r"[0-9a-f]{64}", value) is not None
+    authority = {}
+    for item in expected:
+        if (not isinstance(item, dict) or set(item) != {"key_sha256", "bytes", "sha256"}
+                or not valid_digest(item["key_sha256"]) or not valid_digest(item["sha256"])
+                or not isinstance(item["bytes"], int) or isinstance(item["bytes"], bool) or item["bytes"] < 0
+                or item["key_sha256"] in authority):
+            raise RecoveryFailed("INVALID_BYTE_PROOF")
+        authority[item["key_sha256"]] = item
+    seen = set()
+    for proof in proofs:
+        if not isinstance(proof, ByteRecovery) or proof.source_key_sha256 in seen:
+            raise RecoveryFailed("INVALID_BYTE_PROOF")
+        seen.add(proof.source_key_sha256)
+        item = authority.get(proof.source_key_sha256)
+        if (item is None or not valid_digest(proof.sha256) or not valid_digest(proof.source_sha256)
+                or not isinstance(proof.bytes, int) or isinstance(proof.bytes, bool)
+                or not isinstance(proof.source_bytes, int) or isinstance(proof.source_bytes, bool)
+                or proof.bytes != proof.source_bytes or proof.bytes != item["bytes"]
+                or proof.sha256 != proof.source_sha256 or proof.sha256 != item["sha256"]):
+            raise RecoveryFailed("INVALID_BYTE_PROOF")
+    if seen != authority.keys():
+        raise RecoveryFailed("INVALID_BYTE_PROOF")
 
 
 async def recover_object(storage: Any, key: str, protected_backup: Path) -> ByteRecovery:
     """Actual local object → backup → delete → restore → exact byte parity."""
     original = await storage.get(key)
-    if not original:
+    if original is None:
         raise RecoveryFailed("EMPTY_OBJECT_PROOF")
     with protected_backup.open("xb") as handle:
         handle.write(original)
@@ -86,7 +146,8 @@ async def recover_object(storage: Any, key: str, protected_backup: Path) -> Byte
     actual = await storage.get(key)
     if actual != original:
         raise RecoveryFailed("OBJECT_RESTORE_MISMATCH")
-    return ByteRecovery(expected["bytes"], expected["sha256"])
+    return ByteRecovery(expected["bytes"], expected["sha256"], hashlib.sha256(key.encode("utf-8")).hexdigest(),
+                        expected["bytes"], expected["sha256"])
 
 
 def qualify_database(
@@ -113,9 +174,7 @@ ordinary database parity.
         raise RecoveryFailed("STORAGE_COUNT_REQUIRED")
     if object_count and len(storage_proofs) != object_count:
         raise RecoveryFailed("PRODUCTION_OBJECT_BYTE_PROOF_REQUIRED")
-    if any(not isinstance(proof, ByteRecovery) or proof.bytes <= 0 or len(proof.sha256) != 64
-           for proof in storage_proofs):
-        raise RecoveryFailed("INVALID_BYTE_PROOF")
+    assert_storage_proofs(source, storage_proofs)
     paths = tuple(workspace / name for name in ARTIFACT_NAMES)
     if any(path.exists() for path in paths):
         raise RecoveryFailed("STALE_ARTIFACTS_REFUSED")
@@ -133,6 +192,7 @@ ordinary database parity.
     assert_manifest_parity(source, restored)
     after = dict(read_source())
     assert_manifest_parity(source, after)
+    assert_storage_proofs(after, storage_proofs)
     if source.get("vault_rows") != after.get("vault_rows"):
         raise RecoveryFailed("SOURCE_CHANGED_DURING_BACKUP")
     if [artifact(path) for path in paths] != records:

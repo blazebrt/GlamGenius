@@ -2,7 +2,7 @@
 
 **Authority: F14 historical implementation/evidence and the dated, executed
 F15 live-source recovery evidence below. F01–F14 are CLOSED.
-F15 recovery qualification is complete. Formal finding closure is determined by
+F15 remains open pending corrective recovery qualification. Formal finding closure is determined by
 repository exact-tree merge/post-merge CI authority and is recorded by the audit
 closure process, not inferred from this document alone.**
 
@@ -270,12 +270,27 @@ not a real Supabase Vault encryption test or any F15 recovery evidence.
 
 ## F15 — real live-source recovery, 2026-10-08 UTC
 
-**F15 recovery qualification is complete. Formal finding closure is determined
+**F15 remains open pending corrective recovery qualification. Formal finding closure is determined
 by repository exact-tree merge/post-merge CI authority and is recorded by the
 audit closure process, not inferred from this document alone.**
 
 Ordinary live database parity and the required local recovery/implementation
 checks passed. Qualification does not authorize merge or deployment.
+
+The October 8 result is historical evidence for the fields it measured. PR #222
+was merged before its ready-triggered automated review completed. Independent
+review accepted all seven late findings. In particular, full contents of every
+public table and complete column-definition parity were not measured by that
+drill; it cannot establish formal F15 closure. The historical password also
+appeared in child-process argv. Capture by another process is not established,
+but the credential remains potentially exposed pending authorized rotation.
+
+Current state: **F15 OPEN — post-merge review remediation incomplete**. No new
+live qualification or password rotation is claimed. All preserved October 8
+snapshots and the separate CHECK/cleanup stages retain their original facts.
+The [dated corrective record](evidence/F15-review-remediation-2026-10-09.json)
+maps mutable source paths to exact pre-correction snapshots; the original
+provenance manifest itself remains unchanged.
 
 Machine-readable evidence: [live drill](evidence/F15-2026-10-08.json),
 [local boundaries](evidence/F15-local-boundaries.json), [validation](evidence/F15-validation.json)
@@ -444,7 +459,13 @@ syntax-checked and self-tested locally only; it did not execute the recorded
 production dump/restore, and the live backup was not repeated after credential
 destruction.
 [`safe-source-manifest.sql`](../../scripts/f15/safe-source-manifest.sql)
-queries aggregates/IDs-as-digests only, under a read-only transaction.
+now queries complete public column definitions and all-public-table row-content
+digests, along with supplementary aggregates/IDs, under a read-only transaction.
+Every persisted column contributes to a complete-row hash inside PostgreSQL;
+sorted row hashes preserve duplicate multiplicity without exporting row values.
+Unsupported types fail closed, including on an empty table. Expression hashes
+are compared exactly; CHECK-only canonical reparse does not authorize ignoring
+column/default/generated-expression differences between PG minor versions.
 [`verify-constraint-parity.py`](../../scripts/f15/verify-constraint-parity.py)
 reparses original CHECK expressions locally, fails every other mismatch and
 rolls back. Never dot-source the operator or launch it in a persistent shell:
@@ -457,12 +478,55 @@ Create/init the Supabase scratch directory outside Git, set database major
 17, disable seed, and start the **original** PG17 image. Then pin
 `supabase/.temp/postgres-version` to `17.11.0.004-f15-tls-20261008` for CLI
 dump clients. Never use that client image as the local server. Supply the
-operator's six explicit local paths and use `-SelfTest` before authorizing a
+operator's explicit local paths and use `-SelfTest` before authorizing a
 new live run. The task's confirmed non-secret pooler hostname is its default.
 Do not pass a password as an argument. A new live run prompts locally only
 when all prerequisites are ready. Run one operator at a time. Cleanup removes its dedicated dump clients, SQL
 artifacts and local production copy; return the scratch pin to the original image before
 creating another empty target.
+
+The October 9 corrections require immutable image/base-layer authority,
+the exact Dockerfile and embedded CA hashes, and TLS/read-only environment
+checks before credential entry. The CLI receives a passwordless `--db-url`
+and `PGPASSWORD` only in its child environment. Supabase 2.120.0 itself embeds
+that environment value in its generated container command, so the task-only
+[`pinned-docker-proxy.py`](../../scripts/f15/pinned-docker-proxy.py) removes that
+export before Docker receives the command, sets container environment instead,
+and replaces the mutable image with the verified immutable ID. The authenticated
+ephemeral loopback bridge can operate only on its run's containers. No password
+is supplied through PowerShell, Supabase or Docker process arguments.
+
+[`Review-Safety.ps1`](../../scripts/f15/Review-Safety.ps1) performs six independent
+bounded cleanup attempts. A Docker/container/volume failure cannot skip protected
+SQL or workspace deletion; any failed action prevents cleanup success. The
+[`Test-ReviewSafety.ps1`](../../scripts/f15/Test-ReviewSafety.ps1) harness exercises
+actual Windows child processes with a random synthetic sentinel, independent
+cleanup failures, image-ID substitution and embedded-CA substitution. Its
+`-InjectArgvMutant` switch is a synthetic regression only; the production
+operator has no such switch. Never use a real credential with that harness.
+
+Corrected LOCAL Store A import requires independently obtained, non-secret
+Store B **local cluster** system identity (for example `pg_controldata` on the
+owned recovery target), supplied through `--store-b-system-identifier`. Do not
+invent or infer it from a URL. The importer obtains Store A's actual connected
+`pg_control_system()` identifier and rejects equal or unavailable identities
+before writing; it never acquires a Store B session. Local-only, empty-target,
+canonical OFF/ODbL checks remain required. Tests use genuinely separate local
+clusters and reject same-cluster aliases before insertion.
+
+Storage acceptance now requires a separately measured `storage_byte_manifest`
+with exact source-key SHA-256, expected byte size and expected byte SHA-256 for
+every source object. Proofs must match this source set one-to-one and match
+recovered size/digest; duplicate, missing, extra or fabricated bindings fail.
+Clear private keys and bytes must never enter committed evidence. The historical
+zero-object measurement remains historical; a new source measurement is pending.
+
+These are local corrections, not a new production qualification. The database
+password remains potentially exposed pending explicit rotation authorization
+and verified invalidation. The Render dependency inventory and safe configuration
+reload path must be completed before rotation. Its deployed startup runs release
+steps that can migrate, seed and provision Store A; do not execute that path under
+the no-production-write boundary. A new live drill and correction PR are pending.
 
 [`app.operations.recovery`](../../backend/app/operations/recovery.py) provides
 the reusable fail-closed stage orchestration. It calls the real adapter

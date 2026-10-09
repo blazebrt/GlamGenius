@@ -1,10 +1,69 @@
 BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY;
+SET LOCAL search_path = pg_catalog, public, extensions;
+SET LOCAL TimeZone = 'UTC';
+SET LOCAL DateStyle = 'ISO, YMD';
+SET LOCAL IntervalStyle = 'iso_8601';
+SET LOCAL extra_float_digits = 3;
+SET LOCAL bytea_output = 'hex';
+-- No unsupported type is silently omitted, including on empty tables.
+DO $f15$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM pg_attribute a JOIN pg_class c ON c.oid=a.attrelid
+    JOIN pg_namespace n ON n.oid=c.relnamespace JOIN pg_type t ON t.oid=a.atttypid
+    JOIN pg_namespace tn ON tn.oid=t.typnamespace
+    LEFT JOIN pg_type element ON element.oid=t.typelem
+    LEFT JOIN pg_namespace en ON en.oid=element.typnamespace
+    WHERE n.nspname='public' AND c.relkind IN ('r','p') AND a.attnum>0 AND NOT a.attisdropped
+      AND NOT (t.typtype='e' OR (tn.nspname='pg_catalog' AND t.typname IN
+        ('bool','bytea','char','name','int8','int2','int4','text','oid','float4','float8','bpchar','varchar',
+         'date','time','timestamp','timestamptz','interval','timetz','bit','varbit','numeric','uuid','json','jsonb','inet','cidr','macaddr','macaddr8'))
+        OR (t.typcategory='A' AND (element.typtype='e' OR (en.nspname='pg_catalog' AND element.typname IN
+          ('bool','bytea','int8','int2','int4','text','float4','float8','bpchar','varchar','date','timestamp','timestamptz','numeric','uuid','jsonb')))))
+  ) THEN RAISE EXCEPTION USING MESSAGE='F15_UNSUPPORTED_CANONICAL_TYPE'; END IF;
+END $f15$;
+WITH public_columns AS (
+  SELECT c.relname AS table_name, a.attnum,
+    jsonb_build_object('schema',n.nspname,'table',c.relname,'column',a.attname,'attnum',a.attnum,
+      'type_schema',tn.nspname,'type_name',t.typname,'type_kind',t.typtype,
+      'type_modifier',a.atttypmod,'formatted_type',format_type(a.atttypid,a.atttypmod),
+      'not_null',a.attnotnull,'default_expression_sha256',
+        encode(extensions.digest(convert_to(pg_get_expr(d.adbin,d.adrelid,false),'UTF8'),'sha256'),'hex'),
+      'generated',a.attgenerated,'identity',a.attidentity,
+      'collation_schema',cn.nspname,'collation_name',co.collname,
+      'collation_provider',co.collprovider,'collation_version',co.collversion,
+      'element_type_schema',en.nspname,'element_type_name',element.typname,
+      'element_enum_labels',(SELECT jsonb_agg(e.enumlabel ORDER BY e.enumsortorder) FROM pg_enum e WHERE e.enumtypid=t.typelem),
+      'enum_labels',(SELECT jsonb_agg(e.enumlabel ORDER BY e.enumsortorder) FROM pg_enum e WHERE e.enumtypid=a.atttypid),
+      'identity_sequence',(SELECT jsonb_build_object('start',s.seqstart,'increment',s.seqincrement,
+        'min',s.seqmin,'max',s.seqmax,'cache',s.seqcache,'cycle',s.seqcycle)
+        FROM pg_sequence s WHERE a.attidentity<>'' AND s.seqrelid=pg_get_serial_sequence(format('%I.%I',n.nspname,c.relname),a.attname)::regclass)
+    ) AS authority,
+    -- JSON text retains duplicate keys/whitespace; JSONB is canonical already.
+    CASE WHEN t.typcategory='A' THEN format('jsonb_build_object(''bounds'',array_dims(r.%I),''value'',to_jsonb(r.%I))',a.attname,a.attname)
+      WHEN t.typname='json' THEN format('to_jsonb(r.%I::text)',a.attname)
+      ELSE format('to_jsonb(r.%I)',a.attname) END AS row_value
+  FROM pg_attribute a JOIN pg_class c ON c.oid=a.attrelid
+  JOIN pg_namespace n ON n.oid=c.relnamespace JOIN pg_type t ON t.oid=a.atttypid
+  JOIN pg_namespace tn ON tn.oid=t.typnamespace LEFT JOIN pg_attrdef d ON d.adrelid=a.attrelid AND d.adnum=a.attnum
+  LEFT JOIN pg_type element ON element.oid=t.typelem LEFT JOIN pg_namespace en ON en.oid=element.typnamespace
+  LEFT JOIN pg_collation co ON co.oid=a.attcollation LEFT JOIN pg_namespace cn ON cn.oid=co.collnamespace
+  WHERE n.nspname='public' AND c.relkind IN ('r','p') AND a.attnum>0 AND NOT a.attisdropped
+), table_queries AS (
+  SELECT c.relname AS table_name, format(
+    'SELECT encode(extensions.digest(convert_to(coalesce(string_agg(h, '''' ORDER BY h COLLATE "C"), ''''), ''UTF8''), ''sha256''), ''hex'') AS digest FROM (SELECT encode(extensions.digest(convert_to(jsonb_build_array(%s)::text, ''UTF8''), ''sha256''), ''hex'') AS h FROM public.%I r) hashes',
+    coalesce((SELECT string_agg(pc.row_value, ', ' ORDER BY pc.attnum) FROM public_columns pc WHERE pc.table_name=c.relname),''),c.relname) AS query
+  FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='public' AND c.relkind IN ('r','p')
+)
 SELECT jsonb_build_object(
   'observed_at_utc', to_char(clock_timestamp() AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"'),
   'server_version', current_setting('server_version'),
   'database', current_database(),
   'schema_context', current_schema(),
   'connection_ssl', (SELECT ssl FROM pg_stat_ssl WHERE pid = pg_backend_pid()),
+  'public_columns', (SELECT coalesce(jsonb_agg(authority ORDER BY table_name COLLATE "C",attnum),'[]'::jsonb) FROM public_columns),
+  'public_table_content_sha256', (SELECT coalesce(jsonb_object_agg(table_name,
+    ((xpath('/row/digest/text()',query_to_xml(query,false,true,'')))[1]::text) ORDER BY table_name),'{}'::jsonb) FROM table_queries),
   'alembic_heads', (SELECT jsonb_agg(version_num ORDER BY version_num) FROM public.alembic_version),
   'public_tables', (SELECT jsonb_agg(table_name ORDER BY table_name) FROM information_schema.tables WHERE table_schema = 'public' AND table_type = 'BASE TABLE'),
   'public_table_counts', (
