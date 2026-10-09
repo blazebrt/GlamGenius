@@ -2,7 +2,7 @@
 
 **Authority: F14 historical implementation/evidence and the dated, executed
 F15 live-source recovery evidence below. F01–F14 are CLOSED.
-F15 remains open pending corrective recovery qualification. Formal finding closure is determined by
+F15 corrective recovery qualification is complete. Formal finding closure is determined by
 repository exact-tree merge/post-merge CI authority and is recorded by the audit
 closure process, not inferred from this document alone.**
 
@@ -270,7 +270,7 @@ not a real Supabase Vault encryption test or any F15 recovery evidence.
 
 ## F15 — real live-source recovery, 2026-10-08 UTC
 
-**F15 remains open pending corrective recovery qualification. Formal finding closure is determined
+**F15 corrective recovery qualification is complete. Formal finding closure is determined
 by repository exact-tree merge/post-merge CI authority and is recorded by the
 audit closure process, not inferred from this document alone.**
 
@@ -283,10 +283,11 @@ review accepted all seven late findings. In particular, full contents of every
 public table and complete column-definition parity were not measured by that
 drill; it cannot establish formal F15 closure. The historical password also
 appeared in child-process argv. Capture by another process is not established,
-but the credential remains potentially exposed pending authorized rotation.
+but at the October 9 review point the credential was potentially exposed pending authorized rotation.
+The new October 10 corrective evidence below records its replacement.
 
-Current state: **F15 OPEN — post-merge review remediation incomplete**. No new
-live qualification or password rotation is claimed. All preserved October 8
+Historical October 9 state: **F15 OPEN — post-merge review remediation incomplete**. No new
+live qualification or password rotation was claimed at that point. All preserved October 8
 snapshots and the separate CHECK/cleanup stages retain their original facts.
 The [dated corrective record](evidence/F15-review-remediation-2026-10-09.json)
 maps mutable source paths to exact pre-correction snapshots; the original
@@ -519,14 +520,14 @@ with exact source-key SHA-256, expected byte size and expected byte SHA-256 for
 every source object. Proofs must match this source set one-to-one and match
 recovered size/digest; duplicate, missing, extra or fabricated bindings fail.
 Clear private keys and bytes must never enter committed evidence. The historical
-zero-object measurement remains historical; a new source measurement is pending.
+zero-object measurement remains historical. The corrective source measurement
+below independently confirmed zero objects again.
 
-These are local corrections, not a new production qualification. The database
-password remains potentially exposed pending explicit rotation authorization
-and verified invalidation. The Render dependency inventory and safe configuration
-reload path must be completed before rotation. Its deployed startup runs release
-steps that can migrate, seed and provision Store A; do not execute that path under
-the no-production-write boundary. A new live drill and correction PR are pending.
+These paragraphs describe the October 9 local implementation corrections. At
+that point credential rotation, the Render dependency inventory and a safe
+configuration reload were pending. The October 10 corrective execution below
+supersedes that operational state. Its temporary Uvicorn-only reload did not
+execute release steps that can migrate, seed or provision hosted Store A.
 
 [`app.operations.recovery`](../../backend/app/operations/recovery.py) provides
 the reusable fail-closed stage orchestration. It calls the real adapter
@@ -583,3 +584,110 @@ Current complete results are in the validation evidence linked above.
 Exact-head CI run/status and the review/comment/thread snapshot belong to
 the publication report. No result
 from an earlier F14 SHA is treated as CI evidence for the F15 head.
+
+## Corrective execution — October 10, 2026 local / October 9 UTC
+
+The [new corrective recovery record](evidence/F15-corrective-recovery-2026-10-10.json)
+supersedes the October 9 operational blocker without altering any October 8
+evidence. Its [execution provenance](evidence/F15-corrective-provenance-2026-10-10.json)
+preserves the exact operator, manifest, CHECK verifier, credential helper,
+pinned proxy and local-boundary/cluster-observer bytes actually executed.
+Repository source authority remained main `d7ba6aef68c4656d8d91c4fb6b5fc263653988e5`,
+with correction execution based on approved `8bacfcf9073d26c48068c3e4cbdf81ef791c3ec7`
+plus the specifically tested visible-column-ordinal correction below.
+
+The owner reset the Store B postgres password locally. A fresh, read-only
+`verify-full` connection succeeded with the replacement credential. Render
+reloaded its **existing build** at exact application commit
+`27f1df4a08f17321cba21b95a00a65b37ea5ce5a`; the new live deployment is
+`dep-db4jucd9fdbs73firbog`. Its verified Dockerfile default starts Uvicorn only,
+and observed startup logs reported PostgreSQL up and readiness 200 without
+`app.release`, migration, reference-data seeding or Store A provisioning.
+Both public health and readiness returned 200. Auto-deploy stayed OFF and
+the service stayed FREE. Repository main and the correction branch were not
+deployed; production schema stayed PostgreSQL 17.6 / `d0e1f2g3h4` / 147 tables.
+
+The new credential was staged as a temporary service `POSTGRES_URL` override,
+then normalized into the existing `glamgenius-production-secrets` environment
+group after the successful reload. The override was removed using save-only.
+The normal stored command
+`sh -c "python -m app.release && exec uvicorn server:app --host 0.0.0.0 --port $PORT"`
+was restored using save-only, with **no subsequent deployment**. That command
+is desired configuration for a future separately authorized release; the
+current running instance retains the safe Uvicorn-only reload command.
+
+The initial local reset handoff produced an unready Render attempt, which was
+canceled while the old healthy instance remained live. A Render copy control
+also exposed the old credential during contract inspection. The corrected
+handoff and successful provider reset replaced it. No old-password rejection
+test is claimed: the old value was not safely retained and was not recovered
+for that purpose. Provider reset plus successful new-password authentication
+and the newly started Render instance establish replacement authority; old
+sessions are not new authentication. Rotation-time local memory references,
+handoff server and clipboard were cleared. No Render API token, Supabase CLI
+token or PAT was created. The operator obtained its fresh credential through
+the local non-echoing console; no password entered argv, SQL artifacts, Git or
+the corrective evidence.
+
+The corrected operator executed real roles, schema and COPY data dumps with
+Supabase CLI 2.120.0 and the verified, immutable PG17.11 TLS dump image.
+Source-before and source-after manifests matched. After that comparison, the
+credential helper zero-freed/disposed local holders, closed the credential
+channel, verified the proxy and its owned child had exited, and verified dump
+clients absent at `2026-10-09T19:41:10.5862437Z`. Restore started later, at
+`2026-10-09T19:41:11.5281476Z`, into network-isolated local PostgreSQL 17.11.
+
+| Artifact | Bytes | SHA-256 |
+|---|---:|---|
+| `roles.sql` | 370 | `168a95a9c745af5ed4679751f90419ac9dc434240a213b03e32a06d5664c2308` |
+| `schema.sql` | 247979 | `88ac9b099e1deca8aa9298f213480e49a0d8dbf1fe7b40bfd3e55968546fd07f` |
+| `data.sql` | 171730 | `2a4768cfabcfc523eb1b2e953bb3cee7c0698b90acde631e0ba053e691a4aa05` |
+
+Backup took **48.87s**, restore **4.27s**, verification **4.28s**, and the
+combined operator interval **63.60s**. These are measured drill durations,
+not promised production RPO/RTO or a recovery SLA.
+
+All **147 tables / 452 rows** matched complete canonical row-content digests.
+All **1,679 visible columns**, **393 indexes**, **509 constraints**, extensions,
+row counts, required metadata and Alembic matched. The original schema CHECK
+expressions were reparsed on the actual destination; **43** differing
+minor-version CHECK renderings matched canonically, and the probe transaction
+rolled back with the restored catalog rechecked.
+
+The first corrected execution stopped safely because five columns in
+`label_error_reports` followed an invisible dropped-column physical slot.
+Logical dumps omit dropped slots, so physical `attnum` values compact during
+restore. Manifest `attnum` now means the ordinal of each visible column while
+all names, order, type/default/nullability/generated/identity/collation/enum
+authority and full row values remain compared. The regression accepts exact
+visible-schema replay with compacted slots and rejects reordered columns.
+Reverting this correction is an executed, killed mutant. The failed first
+attempt disposed credentials and deleted its private artifacts before the
+fresh passing execution; it is not represented as a passing drill.
+
+Production Storage was independently re-measured at **zero objects** before,
+during and after dumping; actual production object-byte recovery is **N/A**.
+The [new local-boundary proof](evidence/F15-corrective-local-boundaries-2026-10-10.json)
+executed actual delete/restore recovery of **10,528 synthetic bytes**, exactly
+bound to independent source key/size/digest authority. Corrective LOCAL Store A
+export → destroy → recreate → import → export preserved two canonical records,
+bytes, checksum, ODbL attribution and license; `fetched_at` remained NULL/unknown.
+Its actual cluster identifier `7694755765247750161` differed from the
+independently measured **actual restored Store B** identifier
+`7694754339499962405`. Import had no Store B session; hosted Store A stayed inactive.
+
+Vault source contained two rows and local logical restore contained zero;
+Vault credential recovery is not established. No Vault plaintext or hosted
+encryption key was obtained, and no Vault write/delete occurred. Source and
+restored Auth user counts were zero. Hosted signing keys, provider configuration
+and existing-session recovery remain outside ordinary database parity.
+
+The operator verified cleanup of the credential proxy/owned child, dump clients,
+local restore container and volume, all three SQL artifacts and the protected
+workspace. The boundary runner removed its synthetic workspace and separate
+cluster. New [mutation/native evidence](evidence/F15-corrective-mutants-2026-10-10.json)
+records all **17 source mutants killed**, seven Windows native safety checks,
+four credential-lifetime scenarios, and detecting argv/early-disposed mutants.
+Final local validation and exact-head publication/CI authority are recorded
+separately in the corrective validation evidence and publication report;
+formal audit closure is not inferred from this recovery document.

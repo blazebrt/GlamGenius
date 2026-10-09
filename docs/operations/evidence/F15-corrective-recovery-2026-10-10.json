@@ -1,0 +1,1224 @@
+{
+  "status": "CORRECTIVE_RECOVERY_QUALIFICATION_COMPLETE_FORMAL_CLOSURE_SEPARATE",
+  "recorded_at_utc": "2026-10-09T19:52:43.535452+00:00",
+  "local_date": "2026-10-10",
+  "formal_finding_closure_inferred": false,
+  "approved_execution_base_head": "8bacfcf9073d26c48068c3e4cbdf81ef791c3ec7",
+  "repository_main": "d7ba6aef68c4656d8d91c4fb6b5fc263653988e5",
+  "repository_development_alembic": "o3p4q5r6s7",
+  "source_project": "thuyrlepavzdgkvdzuos",
+  "production_commit": "27f1df4a08f17321cba21b95a00a65b37ea5ce5a",
+  "source_postgres": "17.6",
+  "restored_postgres": "17.11",
+  "source_alembic": [
+    "d0e1f2g3h4"
+  ],
+  "restored_alembic": [
+    "d0e1f2g3h4"
+  ],
+  "public_table_count": 147,
+  "public_column_count": 1679,
+  "public_index_count": 393,
+  "public_constraint_count": 509,
+  "total_public_rows": 452,
+  "public_table_counts": {
+    "looks": 0,
+    "scans": 0,
+    "ai_runs": 0,
+    "invites": 0,
+    "streaks": 0,
+    "accounts": 0,
+    "consents": 0,
+    "routines": 0,
+    "occasions": 0,
+    "app_events": 0,
+    "look_items": 0,
+    "milestones": 0,
+    "substances": 0,
+    "daily_plans": 0,
+    "ingredients": 44,
+    "scan_events": 0,
+    "audit_events": 0,
+    "goal_updates": 0,
+    "media_assets": 0,
+    "memory_facts": 0,
+    "scan_devices": 0,
+    "weekly_plans": 0,
+    "feature_flags": 19,
+    "look_feedback": 0,
+    "metric_events": 0,
+    "routine_steps": 0,
+    "ai_run_outputs": 0,
+    "family_circles": 0,
+    "memory_sources": 0,
+    "progress_goals": 0,
+    "style_requests": 0,
+    "alembic_version": 1,
+    "calendar_events": 0,
+    "evidence_claims": 20,
+    "family_profiles": 0,
+    "feedback_events": 0,
+    "fit_preferences": 0,
+    "inventory_items": 0,
+    "milestone_rules": 12,
+    "outfit_schedule": 0,
+    "perfume_details": 0,
+    "product_records": 0,
+    "progress_photos": 0,
+    "substance_names": 0,
+    "appearance_goals": 0,
+    "evidence_sources": 13,
+    "ingredient_rules": 0,
+    "inventory_events": 0,
+    "look_adjustments": 0,
+    "memory_revisions": 0,
+    "official_records": 0,
+    "quiz_submissions": 0,
+    "user_constraints": 0,
+    "weekly_plan_days": 0,
+    "beta_usage_events": 0,
+    "daily_plan_inputs": 0,
+    "event_ready_plans": 0,
+    "item_usage_events": 0,
+    "lifestyle_context": 0,
+    "routine_adherence": 0,
+    "routine_templates": 17,
+    "shoe_item_details": 0,
+    "style_preferences": 0,
+    "weather_snapshots": 0,
+    "daily_plan_actions": 0,
+    "ingredient_aliases": 127,
+    "invite_redemptions": 0,
+    "item_expiry_events": 0,
+    "item_relationships": 0,
+    "maintenance_events": 0,
+    "metric_definitions": 13,
+    "profile_attributes": 0,
+    "progress_snapshots": 0,
+    "purchase_decisions": 0,
+    "score_explanations": 0,
+    "supplement_details": 0,
+    "appearance_profiles": 0,
+    "comparison_sessions": 0,
+    "compatibility_edges": 0,
+    "compatibility_rules": 9,
+    "event_ready_actions": 0,
+    "gamification_events": 0,
+    "label_error_reports": 0,
+    "onboarding_sessions": 0,
+    "product_ingredients": 0,
+    "recommendation_runs": 0,
+    "rule_evidence_links": 20,
+    "shopping_candidates": 0,
+    "duplicate_candidates": 0,
+    "food_nutrient_values": 0,
+    "food_reference_items": 0,
+    "hair_product_details": 0,
+    "inventory_attributes": 0,
+    "inventory_categories": 7,
+    "laundry_state_events": 0,
+    "notification_devices": 0,
+    "purchase_evaluations": 0,
+    "seed_version_records": 17,
+    "system_worker_status": 2,
+    "account_deletion_jobs": 0,
+    "air_quality_snapshots": 0,
+    "external_integrations": 0,
+    "external_oauth_states": 0,
+    "hydration_preferences": 0,
+    "inventory_import_jobs": 0,
+    "inventory_item_images": 0,
+    "item_condition_events": 0,
+    "nutrition_preferences": 0,
+    "perfume_context_rules": 13,
+    "product_expiry_events": 0,
+    "profile_change_events": 0,
+    "recommendation_inputs": 0,
+    "wardrobe_item_details": 0,
+    "accessory_item_details": 0,
+    "attribute_observations": 0,
+    "beauty_product_details": 0,
+    "contraindication_rules": 0,
+    "evidence_claim_sources": 26,
+    "inventory_value_events": 0,
+    "routine_template_steps": 53,
+    "maintenance_preferences": 0,
+    "notification_deliveries": 0,
+    "official_source_fetches": 0,
+    "product_label_snapshots": 0,
+    "supplement_safety_flags": 0,
+    "care_experience_feedback": 0,
+    "fssai_complaint_handoffs": 0,
+    "notification_preferences": 0,
+    "supplement_context_rules": 7,
+    "food_composition_datasets": 1,
+    "official_record_revisions": 0,
+    "plan_recalculation_events": 0,
+    "appearance_nutrition_rules": 0,
+    "personal_decision_releases": 0,
+    "user_reported_observations": 0,
+    "inventory_import_candidates": 0,
+    "memory_category_preferences": 0,
+    "purchase_evaluation_factors": 0,
+    "recommendation_entitlements": 0,
+    "routine_recommendation_runs": 0,
+    "supplement_label_components": 0,
+    "ingredient_sensitivity_rules": 4,
+    "community_observation_reports": 0,
+    "inventory_subtype_definitions": 22,
+    "supplement_component_knowledge": 0,
+    "invite_registration_reservations": 0,
+    "ingredient_contraindication_rules": 5
+  },
+  "public_table_content_sha256": {
+    "looks": {
+      "digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "scans": {
+      "digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "ai_runs": {
+      "digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "invites": {
+      "digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "streaks": {
+      "digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "accounts": {
+      "digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "consents": {
+      "digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "routines": {
+      "digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "occasions": {
+      "digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "app_events": {
+      "digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "look_items": {
+      "digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "milestones": {
+      "digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "substances": {
+      "digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "daily_plans": {
+      "digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "ingredients": {
+      "digest": "7cbd944ac087c5bfcd98f8194f74b13a7946647dd22bcd49c1774cde41b68692"
+    },
+    "scan_events": {
+      "digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "audit_events": {
+      "digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "goal_updates": {
+      "digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "media_assets": {
+      "digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "memory_facts": {
+      "digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "scan_devices": {
+      "digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "weekly_plans": {
+      "digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "feature_flags": {
+      "digest": "754359f0311067f1808c97f67ce61c98b137177b8348ffb9f6979605031358a6"
+    },
+    "look_feedback": {
+      "digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "metric_events": {
+      "digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "routine_steps": {
+      "digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "ai_run_outputs": {
+      "digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "family_circles": {
+      "digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "memory_sources": {
+      "digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "progress_goals": {
+      "digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "style_requests": {
+      "digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "alembic_version": {
+      "digest": "7eb417e248258d03bebb15bcbe385cbadee5c3174fb123684e157f445a8df072"
+    },
+    "calendar_events": {
+      "digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "evidence_claims": {
+      "digest": "528621150e634f0908ff0cc019923bb4cad7b79cee6e500988b7d23790e4b784"
+    },
+    "family_profiles": {
+      "digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "feedback_events": {
+      "digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "fit_preferences": {
+      "digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "inventory_items": {
+      "digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "milestone_rules": {
+      "digest": "f7c4e3ab1765ec2f3af47d0d549909271cbd3d2db6c5af118c18e96c3bb9f4d9"
+    },
+    "outfit_schedule": {
+      "digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "perfume_details": {
+      "digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "product_records": {
+      "digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "progress_photos": {
+      "digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "substance_names": {
+      "digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "appearance_goals": {
+      "digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "evidence_sources": {
+      "digest": "6e0dbdfd3e45d77aaad978e7d18472979e37905cf4f9533f314e25144337de1c"
+    },
+    "ingredient_rules": {
+      "digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "inventory_events": {
+      "digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "look_adjustments": {
+      "digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "memory_revisions": {
+      "digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "official_records": {
+      "digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "quiz_submissions": {
+      "digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "user_constraints": {
+      "digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "weekly_plan_days": {
+      "digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "beta_usage_events": {
+      "digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "daily_plan_inputs": {
+      "digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "event_ready_plans": {
+      "digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "item_usage_events": {
+      "digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "lifestyle_context": {
+      "digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "routine_adherence": {
+      "digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "routine_templates": {
+      "digest": "7c5e3e43fff7e4cbec01eb0d4c1b691519936780e1342dff72aaebf0aa5cf34c"
+    },
+    "shoe_item_details": {
+      "digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "style_preferences": {
+      "digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "weather_snapshots": {
+      "digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "daily_plan_actions": {
+      "digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "ingredient_aliases": {
+      "digest": "0d11d4c39b0dc4f81115486e157c7cac2ef7cead862bbe912d453450eea23ccf"
+    },
+    "invite_redemptions": {
+      "digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "item_expiry_events": {
+      "digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "item_relationships": {
+      "digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "maintenance_events": {
+      "digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "metric_definitions": {
+      "digest": "82761d66c7bca880706395168ee248c530468793c1e038532144106227d93b8b"
+    },
+    "profile_attributes": {
+      "digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "progress_snapshots": {
+      "digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "purchase_decisions": {
+      "digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "score_explanations": {
+      "digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "supplement_details": {
+      "digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "appearance_profiles": {
+      "digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "comparison_sessions": {
+      "digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "compatibility_edges": {
+      "digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "compatibility_rules": {
+      "digest": "bead568f7842cce9be064bb587f8fbb1cc54258c30378c71debda21afbacccad"
+    },
+    "event_ready_actions": {
+      "digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "gamification_events": {
+      "digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "label_error_reports": {
+      "digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "onboarding_sessions": {
+      "digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "product_ingredients": {
+      "digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "recommendation_runs": {
+      "digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "rule_evidence_links": {
+      "digest": "0a4d463569d9c6402ae3f55c1f082ca8c7e2a6a6cf7375eba433d2a719f695dd"
+    },
+    "shopping_candidates": {
+      "digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "duplicate_candidates": {
+      "digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "food_nutrient_values": {
+      "digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "food_reference_items": {
+      "digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "hair_product_details": {
+      "digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "inventory_attributes": {
+      "digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "inventory_categories": {
+      "digest": "e2facabeb064479e506a19cc5e3c47b401e2f26f594d1ee3b6ae6f115877ec8a"
+    },
+    "laundry_state_events": {
+      "digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "notification_devices": {
+      "digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "purchase_evaluations": {
+      "digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "seed_version_records": {
+      "digest": "aa6e91901b28e0a13ec3a27882f4ed3ebc766c5385150cbeb4227e693ff0cb0a"
+    },
+    "system_worker_status": {
+      "digest": "7e322f8567fbec0df96ff0dae4205f139e08ce291bb6beb7d318170ba08810bc"
+    },
+    "account_deletion_jobs": {
+      "digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "air_quality_snapshots": {
+      "digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "external_integrations": {
+      "digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "external_oauth_states": {
+      "digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "hydration_preferences": {
+      "digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "inventory_import_jobs": {
+      "digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "inventory_item_images": {
+      "digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "item_condition_events": {
+      "digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "nutrition_preferences": {
+      "digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "perfume_context_rules": {
+      "digest": "3f364578bd85218a13ada4b65df4d29a50e74a21eff6bb1e128ff0ee3b871465"
+    },
+    "product_expiry_events": {
+      "digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "profile_change_events": {
+      "digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "recommendation_inputs": {
+      "digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "wardrobe_item_details": {
+      "digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "accessory_item_details": {
+      "digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "attribute_observations": {
+      "digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "beauty_product_details": {
+      "digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "contraindication_rules": {
+      "digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "evidence_claim_sources": {
+      "digest": "0678769953aae34d814ae28037a166c3ff94cce1f830dd56a142457585e546e1"
+    },
+    "inventory_value_events": {
+      "digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "routine_template_steps": {
+      "digest": "3ee37b86207dbad626fcb31887260760994dad3cf0300bf4d4a02120000b306c"
+    },
+    "maintenance_preferences": {
+      "digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "notification_deliveries": {
+      "digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "official_source_fetches": {
+      "digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "product_label_snapshots": {
+      "digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "supplement_safety_flags": {
+      "digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "care_experience_feedback": {
+      "digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "fssai_complaint_handoffs": {
+      "digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "notification_preferences": {
+      "digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "supplement_context_rules": {
+      "digest": "e36d1ffbe491f49ae64785ddd0606ff6ea23c151efeab5f432ab695dd0a72fb9"
+    },
+    "food_composition_datasets": {
+      "digest": "67a566584531e3b30249401136ba75c1c77624bd1b484ad69010f87779004b81"
+    },
+    "official_record_revisions": {
+      "digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "plan_recalculation_events": {
+      "digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "appearance_nutrition_rules": {
+      "digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "personal_decision_releases": {
+      "digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "user_reported_observations": {
+      "digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "inventory_import_candidates": {
+      "digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "memory_category_preferences": {
+      "digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "purchase_evaluation_factors": {
+      "digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "recommendation_entitlements": {
+      "digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "routine_recommendation_runs": {
+      "digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "supplement_label_components": {
+      "digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "ingredient_sensitivity_rules": {
+      "digest": "9ccf29a0f7df33e3e12634f01d49a128b35829da9e43de05a6b39cf3840939eb"
+    },
+    "community_observation_reports": {
+      "digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "inventory_subtype_definitions": {
+      "digest": "6df71799c8ddca9a786aee6cc83a1cd36010ce75840e740fcca6375fde6854b3"
+    },
+    "supplement_component_knowledge": {
+      "digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "invite_registration_reservations": {
+      "digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "ingredient_contraindication_rules": {
+      "digest": "9d2abbdba8654b7728c028b47ac177fea7504af63af2850a473d3f8b11b8651f"
+    }
+  },
+  "column_ordinal_contract": "Visible logical column order; dropped physical slots are omitted by logical backup",
+  "full_manifest_field_proofs": {
+    "database": {
+      "source_before_sha256": "264c0424e4bd463a7d02b9db6896143e1a96cd1c52511119f839d2bc9c934241",
+      "source_after_sha256": "264c0424e4bd463a7d02b9db6896143e1a96cd1c52511119f839d2bc9c934241",
+      "restored_sha256": "264c0424e4bd463a7d02b9db6896143e1a96cd1c52511119f839d2bc9c934241",
+      "equal": true
+    },
+    "schema_context": {
+      "source_before_sha256": "abe06682f7a80de01dad9bf396594c1363243c9cf67df5876bf004260c1fe213",
+      "source_after_sha256": "abe06682f7a80de01dad9bf396594c1363243c9cf67df5876bf004260c1fe213",
+      "restored_sha256": "abe06682f7a80de01dad9bf396594c1363243c9cf67df5876bf004260c1fe213",
+      "equal": true
+    },
+    "alembic_heads": {
+      "source_before_sha256": "ceb6671176bcf0e8ba9b36d2f954a990701880ed8237bf88ef1be91e9304bccd",
+      "source_after_sha256": "ceb6671176bcf0e8ba9b36d2f954a990701880ed8237bf88ef1be91e9304bccd",
+      "restored_sha256": "ceb6671176bcf0e8ba9b36d2f954a990701880ed8237bf88ef1be91e9304bccd",
+      "equal": true
+    },
+    "public_tables": {
+      "source_before_sha256": "2bff64559e495da531c466badebb709b60155a4ba3eb82a41f695838ffbd3186",
+      "source_after_sha256": "2bff64559e495da531c466badebb709b60155a4ba3eb82a41f695838ffbd3186",
+      "restored_sha256": "2bff64559e495da531c466badebb709b60155a4ba3eb82a41f695838ffbd3186",
+      "equal": true
+    },
+    "public_table_counts": {
+      "source_before_sha256": "fd5924315bf69c2ee6e22d6f82a54cef8bc010e3a5c83f224d9197916da90a0f",
+      "source_after_sha256": "fd5924315bf69c2ee6e22d6f82a54cef8bc010e3a5c83f224d9197916da90a0f",
+      "restored_sha256": "fd5924315bf69c2ee6e22d6f82a54cef8bc010e3a5c83f224d9197916da90a0f",
+      "equal": true
+    },
+    "auth_users": {
+      "source_before_sha256": "5feceb66ffc86f38d952786c6d696c79c2dbc239dd4e91b46729d73a27fb57e9",
+      "source_after_sha256": "5feceb66ffc86f38d952786c6d696c79c2dbc239dd4e91b46729d73a27fb57e9",
+      "restored_sha256": "5feceb66ffc86f38d952786c6d696c79c2dbc239dd4e91b46729d73a27fb57e9",
+      "equal": true
+    },
+    "storage_buckets": {
+      "source_before_sha256": "6b86b273ff34fce19d6b804eff5a3f5747ada4eaa22f1d49c01e52ddb7875b4b",
+      "source_after_sha256": "6b86b273ff34fce19d6b804eff5a3f5747ada4eaa22f1d49c01e52ddb7875b4b",
+      "restored_sha256": "6b86b273ff34fce19d6b804eff5a3f5747ada4eaa22f1d49c01e52ddb7875b4b",
+      "equal": true
+    },
+    "storage_objects": {
+      "source_before_sha256": "5feceb66ffc86f38d952786c6d696c79c2dbc239dd4e91b46729d73a27fb57e9",
+      "source_after_sha256": "5feceb66ffc86f38d952786c6d696c79c2dbc239dd4e91b46729d73a27fb57e9",
+      "restored_sha256": "5feceb66ffc86f38d952786c6d696c79c2dbc239dd4e91b46729d73a27fb57e9",
+      "equal": true
+    },
+    "external_integrations": {
+      "source_before_sha256": "5feceb66ffc86f38d952786c6d696c79c2dbc239dd4e91b46729d73a27fb57e9",
+      "source_after_sha256": "5feceb66ffc86f38d952786c6d696c79c2dbc239dd4e91b46729d73a27fb57e9",
+      "restored_sha256": "5feceb66ffc86f38d952786c6d696c79c2dbc239dd4e91b46729d73a27fb57e9",
+      "equal": true
+    },
+    "off_schema_present": {
+      "source_before_sha256": "fcbcf165908dd18a9e49f7ff27810176db8e9f63b4352213741664245224f8aa",
+      "source_after_sha256": "fcbcf165908dd18a9e49f7ff27810176db8e9f63b4352213741664245224f8aa",
+      "restored_sha256": "fcbcf165908dd18a9e49f7ff27810176db8e9f63b4352213741664245224f8aa",
+      "equal": true
+    },
+    "later_label_report_resources_present": {
+      "source_before_sha256": "fcbcf165908dd18a9e49f7ff27810176db8e9f63b4352213741664245224f8aa",
+      "source_after_sha256": "fcbcf165908dd18a9e49f7ff27810176db8e9f63b4352213741664245224f8aa",
+      "restored_sha256": "fcbcf165908dd18a9e49f7ff27810176db8e9f63b4352213741664245224f8aa",
+      "equal": true
+    },
+    "extensions": {
+      "source_before_sha256": "6534214fdd750b5fd23e1f99b99baef97ccc2aaeb08f003f7870a810bfb23dda",
+      "source_after_sha256": "6534214fdd750b5fd23e1f99b99baef97ccc2aaeb08f003f7870a810bfb23dda",
+      "restored_sha256": "6534214fdd750b5fd23e1f99b99baef97ccc2aaeb08f003f7870a810bfb23dda",
+      "equal": true
+    },
+    "public_indexes": {
+      "source_before_sha256": "207d5b9543c6e728e4138dd93f2399af32a8b4725b15befbb6357837d21e3dc3",
+      "source_after_sha256": "207d5b9543c6e728e4138dd93f2399af32a8b4725b15befbb6357837d21e3dc3",
+      "restored_sha256": "207d5b9543c6e728e4138dd93f2399af32a8b4725b15befbb6357837d21e3dc3",
+      "equal": true
+    },
+    "sorted_primary_id_sha256": {
+      "source_before_sha256": "b00f81089cb684e258ef245de47d7b1312efa7e789fdc287260a9c5831ee1fac",
+      "source_after_sha256": "b00f81089cb684e258ef245de47d7b1312efa7e789fdc287260a9c5831ee1fac",
+      "restored_sha256": "b00f81089cb684e258ef245de47d7b1312efa7e789fdc287260a9c5831ee1fac",
+      "equal": true
+    },
+    "public_columns": {
+      "source_before_sha256": "fc73d4f74dd43be1b9f0d3e51d892393b61e9a51d36ac76b02aaa9cf066cdb41",
+      "source_after_sha256": "fc73d4f74dd43be1b9f0d3e51d892393b61e9a51d36ac76b02aaa9cf066cdb41",
+      "restored_sha256": "fc73d4f74dd43be1b9f0d3e51d892393b61e9a51d36ac76b02aaa9cf066cdb41",
+      "equal": true
+    },
+    "public_table_content_sha256": {
+      "source_before_sha256": "d53a99f982c52aa051210e7554ee75cc22c9129bf46cb7118cce53578b2a13da",
+      "source_after_sha256": "d53a99f982c52aa051210e7554ee75cc22c9129bf46cb7118cce53578b2a13da",
+      "restored_sha256": "d53a99f982c52aa051210e7554ee75cc22c9129bf46cb7118cce53578b2a13da",
+      "equal": true
+    }
+  },
+  "source_constraints_unchanged_before_after": true,
+  "ordinary_database_parity": true,
+  "constraint_semantic_verification": {
+    "schema_artifact_sha256_verified": "88ac9b099e1deca8aa9298f213480e49a0d8dbf1fe7b40bfd3e55968546fd07f",
+    "source_constraint_count": 509,
+    "restored_constraint_count": 509,
+    "unchanged_definition_count": 466,
+    "original_check_definitions_reparsed": 43,
+    "all_canonical_definitions_equal": true,
+    "transaction_rolled_back": true,
+    "source_database_write": false,
+    "checks": [
+      {
+        "name": "ck_care_feedback_dimension",
+        "equal": true,
+        "table": "care_experience_feedback",
+        "restored_sha256": "ebe9bdb3e1e15445676ab634433e67626df781035ac7eafe7f87e9ab61f738eb",
+        "source_canonical_sha256": "ebe9bdb3e1e15445676ab634433e67626df781035ac7eafe7f87e9ab61f738eb"
+      },
+      {
+        "name": "ck_care_feedback_sentiment",
+        "equal": true,
+        "table": "care_experience_feedback",
+        "restored_sha256": "b49c2de95acb8b76f7b1349c3b2d7daaedce5c18cce6f5633229460b9b99c220",
+        "source_canonical_sha256": "b49c2de95acb8b76f7b1349c3b2d7daaedce5c18cce6f5633229460b9b99c220"
+      },
+      {
+        "name": "ck_care_feedback_subject_type",
+        "equal": true,
+        "table": "care_experience_feedback",
+        "restored_sha256": "0aa14f9cd9a403a387a8521f9c2d44aa43ece1ca385db00b97edbde2b5346048",
+        "source_canonical_sha256": "0aa14f9cd9a403a387a8521f9c2d44aa43ece1ca385db00b97edbde2b5346048"
+      },
+      {
+        "name": "ck_community_moderation_reason",
+        "equal": true,
+        "table": "community_observation_reports",
+        "restored_sha256": "32a985fe37c606397dc97edc8f30ee8c136a80d7dbea6604523943292615f8ae",
+        "source_canonical_sha256": "32a985fe37c606397dc97edc8f30ee8c136a80d7dbea6604523943292615f8ae"
+      },
+      {
+        "name": "ck_community_observation_code",
+        "equal": true,
+        "table": "community_observation_reports",
+        "restored_sha256": "f82b85b4edf52b48897b66956ec08d1e7173ae1c612600c12d6a85a11264e37a",
+        "source_canonical_sha256": "f82b85b4edf52b48897b66956ec08d1e7173ae1c612600c12d6a85a11264e37a"
+      },
+      {
+        "name": "ck_community_report_status",
+        "equal": true,
+        "table": "community_observation_reports",
+        "restored_sha256": "f3cb8309751e2fe965281888ca0a8165d3751ad0f6bc8309af735be5d3638603",
+        "source_canonical_sha256": "f3cb8309751e2fe965281888ca0a8165d3751ad0f6bc8309af735be5d3638603"
+      },
+      {
+        "name": "ck_evidence_claim_sources_relationship",
+        "equal": true,
+        "table": "evidence_claim_sources",
+        "restored_sha256": "ad9e8935e3ca60a7565e2aa6cbbda04b79bbd5dd0c0c85cb87b89a44c9e5c6e9",
+        "source_canonical_sha256": "ad9e8935e3ca60a7565e2aa6cbbda04b79bbd5dd0c0c85cb87b89a44c9e5c6e9"
+      },
+      {
+        "name": "ck_evidence_claims_claim_type",
+        "equal": true,
+        "table": "evidence_claims",
+        "restored_sha256": "ad5b5f585e21964d53aff4208841eb4020dfb06c5a06c1661c4c852c28b3f5fb",
+        "source_canonical_sha256": "ad5b5f585e21964d53aff4208841eb4020dfb06c5a06c1661c4c852c28b3f5fb"
+      },
+      {
+        "name": "ck_evidence_claims_domain",
+        "equal": true,
+        "table": "evidence_claims",
+        "restored_sha256": "8b0e1fc37556c4cd1b52dbcfb8ff41d65fec6546c6ad5205623f43f3c6e66a7d",
+        "source_canonical_sha256": "8b0e1fc37556c4cd1b52dbcfb8ff41d65fec6546c6ad5205623f43f3c6e66a7d"
+      },
+      {
+        "name": "ck_evidence_claims_regulatory_context",
+        "equal": true,
+        "table": "evidence_claims",
+        "restored_sha256": "badf3863aaa73fddb938b03221572f4b696e1f0c7377b96220ec396c16c7642b",
+        "source_canonical_sha256": "badf3863aaa73fddb938b03221572f4b696e1f0c7377b96220ec396c16c7642b"
+      },
+      {
+        "name": "ck_evidence_claims_review_status",
+        "equal": true,
+        "table": "evidence_claims",
+        "restored_sha256": "9719a337eb70b43d6206fcb4f8eb2010e3b7c0053b596b5f0caf17f3ed14350d",
+        "source_canonical_sha256": "9719a337eb70b43d6206fcb4f8eb2010e3b7c0053b596b5f0caf17f3ed14350d"
+      },
+      {
+        "name": "ck_evidence_claims_status",
+        "equal": true,
+        "table": "evidence_claims",
+        "restored_sha256": "6301ba85061f37d6619b7ec71302dde715a6ddfc195d0bbffbd2d07e3d6ed9bc",
+        "source_canonical_sha256": "6301ba85061f37d6619b7ec71302dde715a6ddfc195d0bbffbd2d07e3d6ed9bc"
+      },
+      {
+        "name": "ck_evidence_claims_strength",
+        "equal": true,
+        "table": "evidence_claims",
+        "restored_sha256": "4a25055637090a92581b1ac00d158583f8fd382d7367d63eb1bae6aab84fcb4c",
+        "source_canonical_sha256": "4a25055637090a92581b1ac00d158583f8fd382d7367d63eb1bae6aab84fcb4c"
+      },
+      {
+        "name": "ck_evidence_claims_tier",
+        "equal": true,
+        "table": "evidence_claims",
+        "restored_sha256": "4db345387b85feeca0536c71636eeea00204403859cb8d606c11c70ea67b1a3d",
+        "source_canonical_sha256": "4db345387b85feeca0536c71636eeea00204403859cb8d606c11c70ea67b1a3d"
+      },
+      {
+        "name": "ck_evidence_sources_source_type",
+        "equal": true,
+        "table": "evidence_sources",
+        "restored_sha256": "d23ae844ac2b5db11005adff324c25ca93418f469e009d1e352008b473dea5f5",
+        "source_canonical_sha256": "d23ae844ac2b5db11005adff324c25ca93418f469e009d1e352008b473dea5f5"
+      },
+      {
+        "name": "ck_evidence_sources_status",
+        "equal": true,
+        "table": "evidence_sources",
+        "restored_sha256": "5b2e71b5a6da085113ed592e313ced13a03b4d9dcbafd843a692cd6a7643668c",
+        "source_canonical_sha256": "5b2e71b5a6da085113ed592e313ced13a03b4d9dcbafd843a692cd6a7643668c"
+      },
+      {
+        "name": "ck_family_profile_relation",
+        "equal": true,
+        "table": "family_profiles",
+        "restored_sha256": "6be7c5821afbdc249c81d109e325e0bf9646ab5f5d77e7c61a7252b94559c270",
+        "source_canonical_sha256": "6be7c5821afbdc249c81d109e325e0bf9646ab5f5d77e7c61a7252b94559c270"
+      },
+      {
+        "name": "ck_food_composition_datasets_import_status",
+        "equal": true,
+        "table": "food_composition_datasets",
+        "restored_sha256": "97b0f2c05036c4f3c7c1f07b77e35f4b43da102167b8931b2a24ed61f55cd070",
+        "source_canonical_sha256": "97b0f2c05036c4f3c7c1f07b77e35f4b43da102167b8931b2a24ed61f55cd070"
+      },
+      {
+        "name": "ck_food_composition_datasets_restricted_import",
+        "equal": true,
+        "table": "food_composition_datasets",
+        "restored_sha256": "ad4cff6a4bc1b2bed39c12e875aa6f86f099336a358227b54f029756ae3a6a85",
+        "source_canonical_sha256": "ad4cff6a4bc1b2bed39c12e875aa6f86f099336a358227b54f029756ae3a6a85"
+      },
+      {
+        "name": "ck_food_composition_datasets_rights_status",
+        "equal": true,
+        "table": "food_composition_datasets",
+        "restored_sha256": "1c33349d733687ed33341a513c15fbef0b491b60075571e725f109cd92f3e475",
+        "source_canonical_sha256": "1c33349d733687ed33341a513c15fbef0b491b60075571e725f109cd92f3e475"
+      },
+      {
+        "name": "ck_food_composition_datasets_status",
+        "equal": true,
+        "table": "food_composition_datasets",
+        "restored_sha256": "65c029ba7fdba62868b30ebcfdd414efd173eb9f42a54d53a4a361772c6be097",
+        "source_canonical_sha256": "65c029ba7fdba62868b30ebcfdd414efd173eb9f42a54d53a4a361772c6be097"
+      },
+      {
+        "name": "ck_food_reference_items_status",
+        "equal": true,
+        "table": "food_reference_items",
+        "restored_sha256": "65c029ba7fdba62868b30ebcfdd414efd173eb9f42a54d53a4a361772c6be097",
+        "source_canonical_sha256": "65c029ba7fdba62868b30ebcfdd414efd173eb9f42a54d53a4a361772c6be097"
+      },
+      {
+        "name": "ck_fssai_handoff_reason",
+        "equal": true,
+        "table": "fssai_complaint_handoffs",
+        "restored_sha256": "69173d4fbe4d21562785a6aa083d81657cbbed70674d6c9bf5732d5761ed7ab9",
+        "source_canonical_sha256": "69173d4fbe4d21562785a6aa083d81657cbbed70674d6c9bf5732d5761ed7ab9"
+      },
+      {
+        "name": "ck_fssai_handoff_status",
+        "equal": true,
+        "table": "fssai_complaint_handoffs",
+        "restored_sha256": "32af36c533529d9dcdc38ff851595d276d35ddfd103fb8b7edcf2f8cc0b96adc",
+        "source_canonical_sha256": "32af36c533529d9dcdc38ff851595d276d35ddfd103fb8b7edcf2f8cc0b96adc"
+      },
+      {
+        "name": "ck_import_candidate_state",
+        "equal": true,
+        "table": "inventory_import_candidates",
+        "restored_sha256": "1805beac553677c343538a08ffa581d311a87a0fb3a418ee81c1b029ad5eda2e",
+        "source_canonical_sha256": "1805beac553677c343538a08ffa581d311a87a0fb3a418ee81c1b029ad5eda2e"
+      },
+      {
+        "name": "ck_notification_delivery_status",
+        "equal": true,
+        "table": "notification_deliveries",
+        "restored_sha256": "93699c27f96ffe91dc37cd6ffa0d50d5a549aae683e936cdc84ee2175bac8c93",
+        "source_canonical_sha256": "93699c27f96ffe91dc37cd6ffa0d50d5a549aae683e936cdc84ee2175bac8c93"
+      },
+      {
+        "name": "ck_notification_device_platform",
+        "equal": true,
+        "table": "notification_devices",
+        "restored_sha256": "d362b66ab4e2d5bf7cca23b99a17dd4a505ced02bd44450c3fd02b879d458917",
+        "source_canonical_sha256": "d362b66ab4e2d5bf7cca23b99a17dd4a505ced02bd44450c3fd02b879d458917"
+      },
+      {
+        "name": "ck_notification_device_status",
+        "equal": true,
+        "table": "notification_devices",
+        "restored_sha256": "a749af8400aa261b80c96c4d6f7543d7bed324e8ebab129e9a8e13e02720661e",
+        "source_canonical_sha256": "a749af8400aa261b80c96c4d6f7543d7bed324e8ebab129e9a8e13e02720661e"
+      },
+      {
+        "name": "ck_official_fetch_status",
+        "equal": true,
+        "table": "official_source_fetches",
+        "restored_sha256": "233b3b3b0740ccf843bc6e6785e9dc83da75d03f8b9b8a0df280733d3f64c300",
+        "source_canonical_sha256": "233b3b3b0740ccf843bc6e6785e9dc83da75d03f8b9b8a0df280733d3f64c300"
+      },
+      {
+        "name": "ck_personal_decision_releases_status",
+        "equal": true,
+        "table": "personal_decision_releases",
+        "restored_sha256": "ac3731243bed74675688ea640b79552caac76c3c88c427e92992f304b4effd2f",
+        "source_canonical_sha256": "ac3731243bed74675688ea640b79552caac76c3c88c427e92992f304b4effd2f"
+      },
+      {
+        "name": "ck_product_label_snapshots_completeness",
+        "equal": true,
+        "table": "product_label_snapshots",
+        "restored_sha256": "71911006cb21d0bcadce0a3ca310cfc09cc514dc9f772ef57dcee3a8bbfcc24e",
+        "source_canonical_sha256": "71911006cb21d0bcadce0a3ca310cfc09cc514dc9f772ef57dcee3a8bbfcc24e"
+      },
+      {
+        "name": "ck_product_label_snapshots_confidence",
+        "equal": true,
+        "table": "product_label_snapshots",
+        "restored_sha256": "37029153667e80cd6af220770734559b43aab5d3b9c39f9232efe47a4aab5cc2",
+        "source_canonical_sha256": "37029153667e80cd6af220770734559b43aab5d3b9c39f9232efe47a4aab5cc2"
+      },
+      {
+        "name": "ck_product_records_confidence",
+        "equal": true,
+        "table": "product_records",
+        "restored_sha256": "37029153667e80cd6af220770734559b43aab5d3b9c39f9232efe47a4aab5cc2",
+        "source_canonical_sha256": "37029153667e80cd6af220770734559b43aab5d3b9c39f9232efe47a4aab5cc2"
+      },
+      {
+        "name": "ck_rule_evidence_links_domain",
+        "equal": true,
+        "table": "rule_evidence_links",
+        "restored_sha256": "8b0e1fc37556c4cd1b52dbcfb8ff41d65fec6546c6ad5205623f43f3c6e66a7d",
+        "source_canonical_sha256": "8b0e1fc37556c4cd1b52dbcfb8ff41d65fec6546c6ad5205623f43f3c6e66a7d"
+      },
+      {
+        "name": "ck_rule_evidence_links_kind",
+        "equal": true,
+        "table": "rule_evidence_links",
+        "restored_sha256": "7f6493d4828bba445991b6ba18f218a71544f9cda4a8db6eeb887058d329cc8c",
+        "source_canonical_sha256": "7f6493d4828bba445991b6ba18f218a71544f9cda4a8db6eeb887058d329cc8c"
+      },
+      {
+        "name": "ck_rule_evidence_links_relationship",
+        "equal": true,
+        "table": "rule_evidence_links",
+        "restored_sha256": "d43848af234b76ec4bfadec6d6da653d3d4c96c1ff2db006c3654bbd17836e28",
+        "source_canonical_sha256": "d43848af234b76ec4bfadec6d6da653d3d4c96c1ff2db006c3654bbd17836e28"
+      },
+      {
+        "name": "ck_substance_names_namespace",
+        "equal": true,
+        "table": "substance_names",
+        "restored_sha256": "051f0f0d71c681ff4e78c5d7975512f1c5ab340c4c47dc6d2b49125b854d8a98",
+        "source_canonical_sha256": "051f0f0d71c681ff4e78c5d7975512f1c5ab340c4c47dc6d2b49125b854d8a98"
+      },
+      {
+        "name": "ck_substances_entity_kind",
+        "equal": true,
+        "table": "substances",
+        "restored_sha256": "3b51c4b01ad1000b0bca79d2189e08546962f602444e92a776d644eb53cc38db",
+        "source_canonical_sha256": "3b51c4b01ad1000b0bca79d2189e08546962f602444e92a776d644eb53cc38db"
+      },
+      {
+        "name": "ck_substances_status",
+        "equal": true,
+        "table": "substances",
+        "restored_sha256": "65c029ba7fdba62868b30ebcfdd414efd173eb9f42a54d53a4a361772c6be097",
+        "source_canonical_sha256": "65c029ba7fdba62868b30ebcfdd414efd173eb9f42a54d53a4a361772c6be097"
+      },
+      {
+        "name": "ck_supplement_knowledge_confidence",
+        "equal": true,
+        "table": "supplement_component_knowledge",
+        "restored_sha256": "f31fc8efa98020992176cc5fa73f979acf12e0ed8f60acaed09d356c1554292e",
+        "source_canonical_sha256": "f31fc8efa98020992176cc5fa73f979acf12e0ed8f60acaed09d356c1554292e"
+      },
+      {
+        "name": "ck_supplement_knowledge_verification",
+        "equal": true,
+        "table": "supplement_component_knowledge",
+        "restored_sha256": "5a711ee454153550864f15c21054fb0c49517016733a39a259ede2f3dfe8e0dd",
+        "source_canonical_sha256": "5a711ee454153550864f15c21054fb0c49517016733a39a259ede2f3dfe8e0dd"
+      },
+      {
+        "name": "ck_supplement_label_source",
+        "equal": true,
+        "table": "supplement_label_components",
+        "restored_sha256": "6e9e52d2464eed9fa4ff6af703d5b33b5d54a1531ed155540d450c137ead6276",
+        "source_canonical_sha256": "6e9e52d2464eed9fa4ff6af703d5b33b5d54a1531ed155540d450c137ead6276"
+      },
+      {
+        "name": "ck_supplement_label_verification_state",
+        "equal": true,
+        "table": "supplement_label_components",
+        "restored_sha256": "404f5ed83b530b9d41de4758f699e876eff2bdc3589ea9a83d7d69f5df9fb6a8",
+        "source_canonical_sha256": "404f5ed83b530b9d41de4758f699e876eff2bdc3589ea9a83d7d69f5df9fb6a8"
+      }
+    ]
+  },
+  "artifacts": [
+    {
+      "filename": "roles.sql",
+      "bytes": 370,
+      "sha256": "168a95a9c745af5ed4679751f90419ac9dc434240a213b03e32a06d5664c2308",
+      "start_utc": "2026-10-09T19:40:16.8940042Z",
+      "finish_utc": "2026-10-09T19:40:23.3489750Z",
+      "seconds": 6.423149899999999,
+      "exit_code": 0
+    },
+    {
+      "filename": "schema.sql",
+      "bytes": 247979,
+      "sha256": "88ac9b099e1deca8aa9298f213480e49a0d8dbf1fe7b40bfd3e55968546fd07f",
+      "start_utc": "2026-10-09T19:40:23.5712218Z",
+      "finish_utc": "2026-10-09T19:40:39.9623953Z",
+      "seconds": 16.3819898,
+      "exit_code": 0
+    },
+    {
+      "filename": "data.sql",
+      "bytes": 171730,
+      "sha256": "2a4768cfabcfc523eb1b2e953bb3cee7c0698b90acde631e0ba053e691a4aa05",
+      "start_utc": "2026-10-09T19:40:40.0677110Z",
+      "finish_utc": "2026-10-09T19:41:05.6017082Z",
+      "seconds": 25.520030799999997,
+      "exit_code": 0
+    }
+  ],
+  "timings": {
+    "dump_start_utc": "2026-10-09T19:40:16.7332384Z",
+    "dump_finish_utc": "2026-10-09T19:41:05.6037191Z",
+    "backup_seconds": 48.870262499999995,
+    "restore_start_utc": "2026-10-09T19:41:11.5281476Z",
+    "restore_finish_utc": "2026-10-09T19:41:15.7998110Z",
+    "restore_seconds": 4.269762,
+    "verification_start_utc": "2026-10-09T19:41:18.017412+00:00",
+    "verification_finish_utc": "2026-10-09T19:41:20.3356763Z",
+    "verification_seconds": 4.2790832,
+    "total_backup_restore_verification_seconds": 63.6011418
+  },
+  "credential_lifetime": {
+    "credential_disposed": true,
+    "credential_destroyed_at_utc": "2026-10-09T19:41:10.5862437Z",
+    "credential_proxy_exit_verified": true,
+    "credential_proxy_children_exit_verified": true,
+    "credential_dump_clients_absent": true,
+    "credential_proxy_child_count": 1,
+    "credential_cleanup_errors": []
+  },
+  "credential_destruction_precedes_restore": true,
+  "rotation_local_destruction": {
+    "completed_at_utc": "2026-10-09T19:31:05.348Z",
+    "rotation_password_reference_cleared": true,
+    "rotation_url_reference_cleared": true,
+    "local_handoff_server_closed": true,
+    "browser_clipboard_cleared": true,
+    "windows_clipboard_cleared": true,
+    "old_credential_recovered_for_test": false,
+    "old_credential_test": "NOT_PERFORMED: old value was not safely retained",
+    "invalidation_authority": "Owner confirmed provider reset; new-password verified TLS read-only authentication passed; newly started Render instance authenticated successfully. Existing pre-rotation sessions are not new authentication."
+  },
+  "production_password_rotation": {
+    "status": "PASS",
+    "authentication_mode": "BROWSER-ONLY AUTHENTICATION",
+    "store_b_project_ref": "thuyrlepavzdgkvdzuos",
+    "password_rotation_completed": true,
+    "provider_reset_confirmation": "Owner confirmed reset locally; the corrected handoff was followed by successful fresh authentication",
+    "new_password_read_only_authentication": {
+      "status": "PASS",
+      "checked_at_utc": "2026-10-09T19:27:12.9767596Z",
+      "tls": "verify-full",
+      "postgres_version": "17.6",
+      "alembic": "d0e1f2g3h4",
+      "public_tables": 147,
+      "storage_objects": 0,
+      "label_report_resources_present": false,
+      "off_data_present": false,
+      "password_in_argv": false,
+      "password_file_created": false
+    },
+    "old_password_replaced_authority": "Successful provider reset plus new-password fresh verified-TLS authentication and a newly started successful Render instance",
+    "old_password_new_authentication_test": "NOT PERFORMED: the old value was not safely retained and was not recovered for this test",
+    "existing_sessions_caveat": "Pre-rotation database sessions are not evidence of new authentication",
+    "old_render_copy_control_exposure": true,
+    "new_password_exposed_in_chat_or_files": false,
+    "supabase_cli_token_created": false,
+    "supabase_pat_created": false,
+    "render_api_token_created": false,
+    "render": {
+      "workspace_id": "tea-dagbmb2jnfac738b4p80",
+      "service_id": "srv-dair328ae00c73fkkht0",
+      "plan": "free",
+      "auto_deploy": "off",
+      "previous_live_deploy": "dep-dajeufnqj5pc73dc4ogg",
+      "unready_attempt_canceled": "dep-db4ji2qj9qps73cprucg",
+      "new_live_deploy": "dep-db4jucd9fdbs73firbog",
+      "exact_live_application_commit": "27f1df4a08f17321cba21b95a00a65b37ea5ce5a",
+      "reload_route": "Environment Save and deploy: existing build, no rebuild",
+      "live_at_utc": "2026-10-09T19:24:16.924933Z",
+      "health_http_status": 200,
+      "readiness_http_status": 200,
+      "health_checked_at_utc": "2026-10-09T19:26:14.6815377Z",
+      "readiness_checked_at_utc": "2026-10-09T19:26:16.0725405Z",
+      "running_reload_command": "Dockerfile default: exec uvicorn server:app --host 0.0.0.0 --port ${PORT:-8000}",
+      "startup_observed": "Started server process; Starting GlamGenius V2; postgres=up; Uvicorn running; readiness 200; deploy live",
+      "app_release_executed": false,
+      "production_schema_migration_executed": false,
+      "seed_or_provisioning_triggered_by_reload": false,
+      "environment_group_id": "evg-dagdg3ek1f9s73cfbhp0",
+      "environment_group": "glamgenius-production-secrets",
+      "environment_group_linked_service_count": 1,
+      "group_postgres_url_updated": true,
+      "temporary_service_postgres_url_removed": true,
+      "normal_stored_docker_command_restored": "sh -c \"python -m app.release && exec uvicorn server:app --host 0.0.0.0 --port $PORT\"",
+      "stored_command_active_on_current_instance": false,
+      "normalization_saved_without_deploy": true,
+      "no_additional_deploy_after_normalization": true,
+      "normalization_rechecked_at_utc": "2026-10-09T19:30:10.611191Z"
+    },
+    "repository_main_not_deployed": true,
+    "correction_pr_not_deployed": true,
+    "production_schema_or_data_written_by_operator": false,
+    "vault_written_or_deleted": false,
+    "hosted_store_a_activated": false,
+    "paid_resources_created": false
+  },
+  "first_attempt_failed_closed": {
+    "phase": "constraint_reparse_verification",
+    "status": "F15_OPEN_REAL_QUALIFICATION_INCOMPLETE",
+    "private_artifacts_removed": true,
+    "credential_disposed": true,
+    "cause": "Five visible columns in label_error_reports followed an invisible dropped-column physical slot. Logical dump compacts those slots.",
+    "correction": "attnum authority is now the visible-column ordinal, retaining exact column ordering and all definition/content fields. Regression accepts compacted slots and rejects reordered columns; reverting to physical attnum is a killed mutant."
+  },
+  "storage": {
+    "independent_source": {
+      "bytes": 10528,
+      "sha256": "248429efeae35b2e7fd8ae08acb4884a21ad0eb5600ef781b5f38b7c845968f7",
+      "object_identity_sha256": "50ea967fe7b1878498151c1653e5c856c487add4770d9d030ccaa65b85dc31fc"
+    },
+    "recovery_proof": {
+      "bytes": 10528,
+      "sha256": "248429efeae35b2e7fd8ae08acb4884a21ad0eb5600ef781b5f38b7c845968f7",
+      "source_bytes": 10528,
+      "source_sha256": "248429efeae35b2e7fd8ae08acb4884a21ad0eb5600ef781b5f38b7c845968f7",
+      "source_object_identity_sha256": "50ea967fe7b1878498151c1653e5c856c487add4770d9d030ccaa65b85dc31fc"
+    },
+    "exact_source_binding": true,
+    "actual_delete_restore_byte_parity": true
+  },
+  "production_storage_objects": 0,
+  "production_storage_object_bytes": "N/A: actual production source contained zero objects",
+  "local_store_a": {
+    "store_b_restored_cluster_authority": {
+      "status": "PASS",
+      "measured_at_utc": "2026-10-09T19:41:17.7624914Z",
+      "container": "supabase_db_glamgenius-f15-corrective-20261010",
+      "operator_phase_observed": "privacy_safe_parity_verification",
+      "credential_disposed_before_measurement": true,
+      "measurement": "Independent read-only pg_control_system query of the actual restored cluster",
+      "identity": {
+        "system_identifier": "7694754339499962405",
+        "server_version": "17.11",
+        "public_tables": 147,
+        "alembic": "d0e1f2g3h4"
+      }
+    },
+    "store_a_system_identifier": "7694755765247750161",
+    "physically_distinct_clusters": true,
+    "record_count": 2,
+    "sha256": "eb1286f2b2a7de8b65a9abb50626ffa536043275162fbbdfdbb0c7e347389501",
+    "export_destroy_recreate_import_parity": true,
+    "fetched_at": "NULL/unknown",
+    "license": "Open Database License (ODbL) v1.0",
+    "attribution": "Contains information from Open Food Facts, made available under the Open Database License (ODbL)",
+    "store_b_session_acquisition_forbidden": true,
+    "hosted_store_a_changed": false
+  },
+  "vault_source_rows": 2,
+  "vault_restored_rows": 0,
+  "vault_contract": "Vault credential recovery is not established by the ordinary logical database backup. External integrations requiring Vault credentials must reconnect after disaster recovery.",
+  "vault_credential_recovery_proven": false,
+  "auth_users_source_and_restored": 0,
+  "hosted_auth_authority_proven": false,
+  "hosted_auth_limitations": "Hosted signing keys, provider configuration, recovery of existing sessions, and encrypted Vault credentials are outside ordinary logical backup qualification.",
+  "private_artifacts_removed": true,
+  "cleanup_failures": [],
+  "production_schema_or_data_written": false,
+  "hosted_store_a_activated": false,
+  "current_main_deployed": false,
+  "paid_resources_created": false,
+  "guaranteed_production_rpo": false,
+  "guaranteed_production_rto": false
+}

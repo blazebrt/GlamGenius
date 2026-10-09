@@ -1,0 +1,52 @@
+{
+  "execution_base_head": "8bacfcf9073d26c48068c3e4cbdf81ef791c3ec7",
+  "new_defect_correction_executed": true,
+  "executed_source_bindings": [
+    {
+      "path": "docs/operations/evidence/F15-executed-corrective-2026-10-10-operator.ps1.txt",
+      "bytes": 38156,
+      "sha256": "59bc05d2688989931fd4bc6412fc031f765f1bdc63b2570c69c3def95766e057"
+    },
+    {
+      "path": "docs/operations/evidence/F15-executed-corrective-2026-10-10-credential-safety.ps1.txt",
+      "bytes": 10864,
+      "sha256": "c16898f5cd20a1ad994b84b97d56e736918896a32ffc9129b9d3a81b1e9b9a5c"
+    },
+    {
+      "path": "docs/operations/evidence/F15-executed-corrective-2026-10-10-manifest.sql.txt",
+      "bytes": 9155,
+      "sha256": "cbd0fb9f7306bbd240344950741ae14960e23a247468c96482f2e1cd092f6df9"
+    },
+    {
+      "path": "docs/operations/evidence/F15-executed-corrective-2026-10-10-constraint-verifier.py.txt",
+      "bytes": 8472,
+      "sha256": "d8bbccf910c0851dd3adfc339a59ce8d0140a3e2de01160de919cd808b64b5af"
+    },
+    {
+      "path": "docs/operations/evidence/F15-executed-corrective-2026-10-10-pinned-proxy.py.txt",
+      "bytes": 8413,
+      "sha256": "f4cfb2788b42eaf9445a164af8278ae3a076ff3c7cdc99643469211f37bc15de"
+    },
+    {
+      "path": "docs/operations/evidence/F15-executed-corrective-2026-10-10-dump-Dockerfile.txt",
+      "bytes": 352,
+      "sha256": "6591b0aa555a89ac0c2a20a5aeefcfccffde66b34177d9f9964b2db98dd8cef6"
+    },
+    {
+      "path": "docs/operations/evidence/F15-executed-corrective-2026-10-10-local-boundaries.py.txt",
+      "bytes": 5288,
+      "sha256": "42b3daa4f6eada8ad9e3be5b1d9c47dad5e67bc75a4afe47d953670ad96096d5"
+    },
+    {
+      "path": "docs/operations/evidence/F15-executed-corrective-2026-10-10-cluster-observer.ps1.txt",
+      "bytes": 2369,
+      "sha256": "74c6acce7b9ebf5379a7aac364f323af4e20e9d2f542ce508f8b7a5a1f0ea96b"
+    }
+  ],
+  "dump_image_id": "sha256:afeb281c749d2637851439e6266abd1a1e1cbab7c3245d093783355776a89d8d",
+  "source_tls": "verify-full",
+  "embedded_source_ca_verified": true,
+  "source_default_transaction_read_only": true,
+  "historical_october_8_evidence_rewritten": false,
+  "production_password_in_argv": false
+}

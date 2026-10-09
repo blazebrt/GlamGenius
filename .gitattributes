@@ -8,3 +8,4 @@
 /docs/operations/evidence/F15-source-public-tls-ca-2026-10-08.crt.txt -text whitespace=blank-at-eol,blank-at-eof,space-before-tab,cr-at-eol
 /docs/operations/evidence/F15-pre-correction-2026-10-09-*.txt -text whitespace=blank-at-eol,blank-at-eof,space-before-tab,cr-at-eol
 /scripts/f15/Dockerfile.dump-tls -text
+/docs/operations/evidence/F15-executed-corrective-2026-10-10-*.txt -text whitespace=blank-at-eol,blank-at-eof,space-before-tab,cr-at-eol

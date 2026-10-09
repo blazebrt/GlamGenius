@@ -126,6 +126,26 @@ def test_unsupported_type_fails_even_on_empty_table(parity_database):
         parity_database("CREATE TABLE unsupported(value xml)")
 
 
+def test_logical_column_order_survives_dropped_slots_and_rejects_reordering(parity_database):
+    before = parity_database("""CREATE TABLE ordinal_gap(first integer, discarded text, last text);
+        ALTER TABLE ordinal_gap DROP COLUMN discarded;
+        INSERT INTO ordinal_gap(first,last) VALUES (7,'synthetic');""")
+    # Replay the visible schema exactly as a logical dump does, without the
+    # source's invisible dropped-column slot.
+    compacted = parity_database("""DROP TABLE ordinal_gap;
+        CREATE TABLE ordinal_gap(first integer, last text);
+        INSERT INTO ordinal_gap(first,last) VALUES (7,'synthetic');""")
+    assert [c["attnum"] for c in before["public_columns"] if c["table"] == "ordinal_gap"] == [1, 2]
+    assert before["public_columns"] == compacted["public_columns"]
+    recovery.assert_manifest_parity(before, compacted)
+    reordered = parity_database("""DROP TABLE ordinal_gap;
+        CREATE TABLE ordinal_gap(last text, first integer);
+        INSERT INTO ordinal_gap(first,last) VALUES (7,'synthetic');""")
+    assert before["public_columns"] != reordered["public_columns"]
+    with pytest.raises(recovery.RecoveryFailed, match="MANIFEST_MISMATCH"):
+        recovery.assert_manifest_parity(before, reordered)
+
+
 def test_row_multiset_preserves_duplicates_and_ignores_order(parity_database):
     before = parity_database("CREATE TABLE duplicate_probe(v text); INSERT INTO duplicate_probe VALUES ('a'),('b'),('a')")
     reordered = parity_database("TRUNCATE duplicate_probe; INSERT INTO duplicate_probe VALUES ('a'),('a'),('b')")
