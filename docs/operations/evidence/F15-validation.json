@@ -1,0 +1,43 @@
+{
+  "full_backend": {
+    "tests": 8199,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 1,
+    "passed": 8198,
+    "seconds": 2463.553,
+    "timestamp_utc": "2026-10-08T17:34:00.547257+00:00"
+  },
+  "invite_required": {
+    "tests": 17,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0,
+    "passed": 17,
+    "seconds": 19.918,
+    "timestamp_utc": "2026-10-08T18:13:23.250588+00:00"
+  },
+  "focused": {
+    "tests": 77,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0,
+    "passed": 77,
+    "seconds": 6.501,
+    "timestamp_utc": "2026-10-08T17:33:11.778901+00:00"
+  },
+  "mutants_executed": 8,
+  "mutants_killed": 8,
+  "original_bytes_restored": true,
+  "ruff_backend": "passed",
+  "compileall_backend": "passed",
+  "standalone_constraint_helper_syntax": "passed",
+  "windows_operator_syntax_and_credential_free_selftest": "passed",
+  "alembic_one_head": "o3p4q5r6s7",
+  "alembic_schema_check": "passed",
+  "git_diff_check": "passed",
+  "gitleaks_all_changed_files": "passed without exclusions",
+  "whole_directory_scan_note": "Two unchanged public ICMR-NIN reference fixture findings; existing historical Git ignores unchanged. No new suppression.",
+  "source_dump_restore_repeated_after_refactor": false,
+  "interrupted_partial_full_run": "1820 passed before interruption to qualify final source snapshot; not complete suite evidence"
+}

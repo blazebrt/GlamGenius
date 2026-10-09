@@ -1,0 +1,53 @@
+{
+  "evidence_kind": "executed LOCAL synthetic boundaries; no hosted state changed",
+  "focused_tests": {
+    "passed": 77,
+    "seconds": 6.501,
+    "timestamp_utc": "2026-10-08T17:33:11.778901+00:00",
+    "failures": 0,
+    "errors": 0
+  },
+  "local_storage": {
+    "bytes": 10517,
+    "sha256": "40938c7025ff5d75f69233f3a5fe873735d9f03e84228179cde5caaba9d777d5",
+    "backup_destroy_restore_verified": true,
+    "production_object_bytes": false
+  },
+  "local_store_a": {
+    "record_count": 2,
+    "sha256": "eb1286f2b2a7de8b65a9abb50626ffa536043275162fbbdfdbb0c7e347389501",
+    "export_destroy_recreate_import_parity": true,
+    "fetched_at": "NULL/unknown",
+    "license": "Open Database License (ODbL) v1.0",
+    "attribution": "Contains information from Open Food Facts, made available under the Open Database License (ODbL)",
+    "hosted_store_a_changed": false
+  },
+  "operator_selftest": {
+    "status": "OPERATOR_SELF_TEST_PASSED",
+    "phase": "self_test_complete",
+    "credential_received": false,
+    "credential_disposed": true,
+    "production_mutation": false,
+    "cli_version": "2.120.0",
+    "local_pg_version": "17.11",
+    "workspace_current_user_only": true
+  },
+  "executed_live_operator_source_sha256": "a07f2cc68743d4fdeae961310bcaa2f5e381437ddb0d87b3005a3153bec66df2",
+  "note": "The accepted live recovery was multi-stage: historical source operator and raw parity refusal, separate CHECK reparse, then separate private-artifact cleanup. The later parameterized Windows operator was syntax/self-tested locally only. The real source drill was not repeated.",
+  "synthetic_postgres_server": {
+    "version_major": 16,
+    "memory_backed_data_directory": true,
+    "fsync": false,
+    "synchronous_commit": false,
+    "full_page_writes": false,
+    "crash_durability_proven": false
+  },
+  "executed_live_operator_source_path": "docs/operations/evidence/F15-executed-live-operator-2026-10-08.ps1.txt",
+  "provenance_manifest_path": "docs/operations/evidence/F15-provenance.json",
+  "historical_operator_private_artifact_cleanup": false,
+  "cleanup_executed_separately": true,
+  "constraint_reparse_executed_separately": true,
+  "current_local_absence_reverified": true,
+  "current_reusable_operator_path": "scripts/f15/Invoke-StoreB-Drill.ps1",
+  "current_reusable_operator_executed_against_production": false
+}

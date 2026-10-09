@@ -1,12 +1,15 @@
 # Backup / restore qualification — current evidence
 
-**Authority: durable F14 implementation/evidence; dated publication/review
-checkpoints; CURRENT F15 status. NOT a successful recovery qualification.**
+**Authority: F14 historical implementation/evidence and the dated, executed
+F15 live-source recovery evidence below. F01–F14 are CLOSED.
+F15 recovery qualification is complete. Formal finding closure is determined by
+repository exact-tree merge/post-merge CI authority and is recorded by the audit
+closure process, not inferred from this document alone.**
 
 Starting main: `83d9f758a1c59be591958c437cff116e436696c6`, tree
 `4971fe9d830ddf594cbb5cba5b2ca7730c278e30`. Audit Lane 6 addresses F14/F15
-only. **F15 OPEN — real backup/restore qualification incomplete.** F01–F13
-remain closed. This document does not authorize deployment, Phase B, paid
+only. The October 8 F15 evidence supersedes the initial tooling blocker.
+F01–F14 remain closed. This document does not authorize deployment, Phase B, paid
 resources, a hosted project/branch, Store A activation or production writes.
 
 The [old drill draft](../production/BACKUP_AND_RESTORE_DRILL.md) is preserved
@@ -44,7 +47,7 @@ Read-only catalog inspection confirms extension `supabase_vault 0.3.1`.
 `vault.update_secret(uuid, text, text, text, uuid)` returns `void`.
 The catalog contains **zero** functions named `vault.delete_secret`.
 
-The production credential adapter now uses only:
+The repository production credential adapter uses only:
 
 ```sql
 DELETE FROM vault.secrets WHERE id = CAST(:id AS uuid)
@@ -265,70 +268,254 @@ zero pre-existing Vault schemas. Ruff, compileall and the single Alembic head
 were rechecked. These tests remain synthetic SQL-contract qualification,
 not a real Supabase Vault encryption test or any F15 recovery evidence.
 
-## F15 — blocked at the secure-execution preflight
+## F15 — real live-source recovery, 2026-10-08 UTC
 
-**F15 OPEN — real Store B backup/restore qualification incomplete.**
+**F15 recovery qualification is complete. Formal finding closure is determined
+by repository exact-tree merge/post-merge CI authority and is recorded by the
+audit closure process, not inferred from this document alone.**
 
-This desktop is founder-local, but a usable production Store B database URL/
-password is **not configured** in the checked process settings or local
-project environment files. Read-only provider SQL access does not supply a
-credential to a local logical-export tool, and must not be used to stream
-private production rows through chat as an alternative.
+Ordinary live database parity and the required local recovery/implementation
+checks passed. Qualification does not authorize merge or deployment.
 
-| Capability | Observed state |
+Machine-readable evidence: [live drill](evidence/F15-2026-10-08.json),
+[local boundaries](evidence/F15-local-boundaries.json), [validation](evidence/F15-validation.json)
+and [eight executed mutants](evidence/F15-mutants.json). These contain aggregate
+counts, schema names and hashes only. No SQL dump, private row, object bytes,
+credential, Vault plaintext or hosted encryption key is committed.
+
+### Source authority and development authority
+
+Live production is intentionally behind repository main because Render auto-deploy is OFF.
+
+| Authority | Exact state |
 | --- | --- |
-| Supabase CLI/version/`db dump --help` | Not available; no CLI dump executed. |
-| psql | Not on Windows PATH; Windows and isolated Linux test binaries are `16.15`, not a Supabase PG17/Vault restore target. |
-| Docker client | `29.1.3`, build `f52814d`. |
-| Docker Linux engine / local Supabase PG17/Vault | Unavailable: `dockerDesktopLinuxEngine` pipe not found. |
-| Production DB credentials | Not available in checked secure local configuration. |
-| Roles/schema/data dumps | NOT RUN; no files, sizes or SHA-256 values to report. |
-| Isolated Store B restore / verification | NOT RUN; no source/restored manifest parity. |
-| Backup/restore/verification/total duration | NOT MEASURED; not zero-second successful operations. |
-| Local synthetic Auth / Storage recovery | NOT RUN. |
-| Store A local export/import recovery | NOT RUN; no import path was added in this blocked attempt. |
+| Live Render service | `glamgenius-api-kugi`, `srv-dair328ae00c73fkkht0`; auto-deploy OFF |
+| Live application | `27f1df4a08f17321cba21b95a00a65b37ea5ce5a` |
+| Live Store B | `thuyrlepavzdgkvdzuos`, PostgreSQL 17.6, Alembic `d0e1f2g3h4` |
+| Restored disposable local target | Supabase PostgreSQL 17.11; Alembic `d0e1f2g3h4` |
+| Repository branch base | `f1a2db6dad3f6824a3d24f7f6a6ebcaaf8a1fc4f`, tree `7b2a13340a56690e6da5e50f584eeadaffd9c760` |
+| Current development migration head | `o3p4q5r6s7`; one head; no migration added by F15 |
 
-Therefore F15 work stops at preflight. There is no qualified recovery harness
-or real production-source restore to claim. Removing the fake simulator,
-passing CI migrations or testing synthetic UUID deletion does not close F15.
-**No guaranteed production RPO is currently claimed.** No measured RTO or
-contractual recovery SLA is claimed either.
+All 147 live public base tables were restored. `label_report_resources` and
+`off_data` were absent in the source and restored copy, as expected for that
+deployed release. Later undeployed tables are not restoration requirements.
+The recovery branch was created only after the actual backup, restore and
+parity passed. Production and repository main were never reset or migrated.
 
-## Boundaries for the still-required real drill
+### Actual artifacts and observations
 
-Use [current official CLI backup/restore guidance](https://supabase.com/docs/guides/platform/migrating-within-supabase/backup-restore)
-and [platform-to-local/self-hosted restore guidance](https://supabase.com/docs/guides/self-hosting/restore-from-platform),
-after checking installed CLI help. Separate roles, schema and data artifacts
-are required; a single default schema dump is not a complete backup. Final
-restore must be isolated and fail on every SQL error, with source/restored
-manifest verification, measured timestamps/durations and artifact sizes/
-hashes. Use a supported Supabase PG17 environment; this local PG16 SQL test
-database is not that target. The current changelog, including the
-[PG17 self-hosting change](https://supabase.com/changelog/46080-self-hosted-supabase-upgrading-from-pg-15-to-17-breaking-change)
-and [minor-release compatibility notice](https://supabase.com/changelog/postgres-15-19-17-11-breaking-changes),
-was checked; no provider upgrade or configuration change was performed.
+Supabase CLI **2.120.0** exported separate roles, schema and data-only COPY
+artifacts. The data command excluded `storage.buckets_vectors` and
+`storage.vector_indexes` using the installed help syntax. Official guidance:
+[platform backup/restore](https://supabase.com/docs/guides/platform/migrating-within-supabase/backup-restore)
+and [restore to local/self-hosted](https://supabase.com/docs/guides/self-hosting/restore-from-platform).
 
-- **Auth:** logical user rows and JWT/API/OAuth/SMTP authority are different
-  boundaries. No row recovery or existing-session validity was proved here.
-- **Storage:** the zero-object preflight is not an executed byte-transfer
-  proof. Database metadata does not back up object bytes. Re-measure for the
-  real drill and qualify a separate synthetic LOCAL byte recovery path; if
-  actual objects exist, their protected local recovery set is also required.
-- **Vault:** the two encrypted rows were counted only. No secret was read,
-  exported or decrypted. A database restore alone cannot prove decryptability:
-  [Vault's key is outside ordinary database data](https://supabase.com/docs/guides/database/vault#encryption-key-location).
-  Until independently verified safe, affected Calendar credentials require
-  reconnection, not a claim that old opaque references are usable. Neither
-  key extraction nor production credential mutation is authorized.
-- **Store A:** hosted Store A stayed inactive and untouched. Its future LOCAL
-  ODbL cache export/import proof must remain physically separate, enforce
-  `OFF_FIELDS`, verify manifest hashes, preserve attribution and restore
-  `fetched_at` as NULL/unknown. Never load Store B into Store A or acquire a
-  Store B session from its importer. The existing ODbL wall is unchanged.
-- **Private artifacts:** no SQL dumps or Storage bytes were created here.
-  Future dumps belong only in protected temporary operator storage, never Git,
-  public/shared CI artifacts, chat or shared buckets. Never print credentials.
+| Actual artifact | Bytes | SHA-256 | Seconds | Exit |
+| --- | ---: | --- | ---: | ---: |
+| roles.sql | 370 | `168a95a9c745af5ed4679751f90419ac9dc434240a213b03e32a06d5664c2308` | 12.17 | 0 |
+| schema.sql | 247979 | `88ac9b099e1deca8aa9298f213480e49a0d8dbf1fe7b40bfd3e55968546fd07f` | 35.44 | 0 |
+| data.sql | 171730 | `d0603b1bb1b9c9710523d788bc0f063b8007fa720a7e496c682430a2bc389ea1` | 63.64 | 0 |
 
-F14 implementation qualification and formal finding closure are separate
-authorities, as defined above. F15 remains OPEN: the historical evidence in
-this document does not establish real Store B recovery or complete Lane 6.
+Backup ran `16:49:10.9800215Z`–`16:51:02.3814011Z`: **111.40 s**.
+Restore ran `16:51:05.9649143Z`–`16:51:07.8825134Z`: **1.91 s**.
+The successful final verification took **0.734 s**. Total elapsed from backup
+start through successful verification was **596.54 s**, including constraint
+diagnosis and re-verification; it is not the sum of the successful phase
+times. Full UTC timestamps are in the evidence.
+No guaranteed production RPO is currently claimed.
+These observations are not guaranteed RTO or an SLA.
+
+The source used its confirmed IPv4 Session pooler. Client certificate chain
+and hostname validation used `sslmode=verify-full` with the official public
+CA; no Windows trust-store change or paid IPv4 add-on was required.
+`pg_stat_ssl` behind the pooler measures the internal pooler/database hop;
+same-session client connection information separately established client TLS.
+Source transactions and the dump container enforced read-only defaults.
+
+CLI 2.120.0's container environment did not propagate the URL's SSL options.
+A **local-only** image derived from the pinned Supabase PG17.11 image added
+only the public CA and verified-TLS/read-only environment defaults. It held
+no credential, production row or dump, and was never pushed. Image source is
+[`Dockerfile.dump-tls`](../../scripts/f15/Dockerfile.dump-tls). The dump tag
+was used only for clients; the empty local server used the original image.
+
+The temporary dump directory had inheritance disabled and access only for
+the current Windows user. Password entry was non-echoing and local/process
+only. The password process was terminated and verified gone. All three SQL
+artifacts, the production-copy container and its exact volume were removed
+after parity; there is no approved retained production copy. Deletion does
+not claim forensic erasure of SSD/controller backups.
+
+### Restore and parity
+
+The local restore used PG17 tooling, `--single-transaction`,
+`ON_ERROR_STOP=1`, roles → schema → `SET session_replication_role = replica`
+→ data → origin, and returned exit 0 with no SQL error. No hosted destination
+was used. Source manifests before/after were unchanged.
+
+All table names, every public table row count, 393 index definitions and
+validity flags, seven extension names/versions/schemas, Auth/Storage metadata
+aggregates and eight sorted-primary-ID SHA-256 values matched. A PK digest
+proves identity parity for the selected tables; it does not hash private
+column values or claim full row-content parity.
+
+All 509 constraint identities/types/validation flags matched. Of their raw
+definition hashes, 466 were identical and 43 CHECK definitions differed due
+to PG17.6/17.11 catalog formatting. Each **original** CHECK expression from
+the integrity-checked schema artifact was reparsed on the restored target as
+a temporary NOT VALID probe inside an explicit transaction. All 43 resulting
+canonical definitions matched the actual restored definition hashes. The
+probe transaction rolled back; the catalog was rechecked unchanged. A hash
+mismatch was not ignored or globally normalized away.
+
+### Recovery boundaries
+
+| Boundary | Actual observation and recovery contract |
+| --- | --- |
+| Ordinary Store B | Actual dump → isolated restore → aggregate/schema/index/constraint/selected-ID parity passed at the live `d0e1f2g3h4` authority. |
+| Auth | Source/restored users 0. Database rows do not qualify JWT signing secrets, API keys, OAuth/SMTP settings or existing access-token/session validity. No production user was created. |
+| Vault | Source 2, restored 0. Dump COPY/schema inventory contained no Vault data. External integrations 0 at dump time. No secret or hosted root key was retrieved; no Vault write/delete occurred. |
+| Production Storage bytes | actual production object-byte recovery: N/A — source contained zero objects |
+| Synthetic LOCAL Storage | Actual object → separate local byte backup → deletion → restore → size/SHA-256 and exact byte equality passed through the local storage adapter. This is a local byte-transfer proof, not hosted API/configuration recovery. |
+| Store A | Hosted `yvbeipihxptwttsteatp` remained INACTIVE/untouched. A distinct local database with synthetic OFF fixtures passed export → actual table destruction → recreate → import → exact JSONL/checksum parity. |
+
+Vault credential recovery is not established by the ordinary logical database backup. External integrations requiring Vault credentials must reconnect after disaster recovery.
+
+The local Store A importer accepts canonical export artifacts only, verifies
+checksum/count/license/attribution, bounds data at 64 MiB/100,000 records,
+rejects unknown/proprietary fields and supplied `fetched_at`, and refuses
+hosted targets, Store B aliases and a cached engine bound to another target.
+It validates the entire artifact before acquiring its guarded Store A
+session, locks an empty target, and imports atomically. Restored `fetched_at`
+is NULL/unknown, not the recovery time. No Store B session is acquired.
+
+### Exact execution provenance and reusable operator
+
+The October 8 qualification was a multi-stage executed recovery proof. The
+historical live operator performed the read-only Store B dump and isolated
+restore but failed closed on raw PG17.6/17.11 CHECK-definition differences and
+did not remove private SQL/local-copy artifacts itself. A separately executed
+CHECK-reparse verification established canonical equality for all 43 differing
+CHECK definitions and rolled its probes back. A separately executed cleanup
+removed the protected SQL workspace and local production-copy container/volume.
+The later reusable operator incorporates both verification and cleanup but was
+not rerun against production.
+
+Historical operator performed credential/process cleanup but did not perform SQL workspace or local production-copy container/volume cleanup. Those artifacts were removed by a separately executed post-drill cleanup step.
+
+The [provenance manifest](evidence/F15-provenance.json) binds exact SHA-256 and
+byte counts for the [executed historical operator](evidence/F15-executed-live-operator-2026-10-08.ps1.txt),
+[executed CHECK helper](evidence/F15-executed-constraint-reparse-2026-10-08.py.txt),
+[original CHECK result](evidence/F15-constraint-reparse-verification.json),
+[separate cleanup record](evidence/F15-private-artifact-cleanup.json),
+the public source TLS CA and the original privacy-safe evidence exporter.
+The source-manifest SQL and TLS Dockerfile are byte-for-byte identical to their
+existing committed files; their paths and hashes are bound without duplicate
+historical copies. The historical CHECK helper differs from the later reusable
+helper and is preserved independently. Snapshot bytes are protected from Git
+newline conversion. These historical `.txt` files are review evidence; do not
+execute them as the current operator.
+
+The [current local absence check](evidence/F15-current-local-absence-2026-10-09.json)
+verified the exact recorded SQL workspace, container/volume names, dump-image
+clients and credential-process PIDs without contacting production. After the
+original cleanup, an empty PG17 target had been recreated under the same name.
+That replacement was verified to contain zero public tables, Auth users,
+Storage buckets/objects and Vault rows, then removed with its task-owned volume
+so those names are currently absent. Unrelated local resources were untouched.
+This is current cleanup-state verification, not a second production drill.
+
+The accepted parity proof still contains 509 constraints: 466 unchanged raw
+definitions and the separately verified 43 canonical CHECK definitions. The
+original operator's refusal is part of this evidence chain; it is not reported
+as automatic canonical-parity success or private-artifact cleanup.
+
+No guaranteed production RTO is currently claimed. These executed observations
+and provenance records do not authorize migration, deployment or finding closure.
+
+### Reviewable operator and fail-closed tests
+
+[`Invoke-StoreB-Drill.ps1`](../../scripts/f15/Invoke-StoreB-Drill.ps1) is the
+parameterized Windows operator derived from the executed local script. It
+incorporates the previously separate CHECK verification and implements live-run
+private-artifact cleanup in `finally`. Its PG-minor constraint handling is the
+reviewed form of the separately executed verification helper. The refactor was
+syntax-checked and self-tested locally only; it did not execute the recorded
+production dump/restore, and the live backup was not repeated after credential
+destruction.
+[`safe-source-manifest.sql`](../../scripts/f15/safe-source-manifest.sql)
+queries aggregates/IDs-as-digests only, under a read-only transaction.
+[`verify-constraint-parity.py`](../../scripts/f15/verify-constraint-parity.py)
+reparses original CHECK expressions locally, fails every other mismatch and
+rolls back. Never dot-source the operator or launch it in a persistent shell:
+it exits the process to destroy managed credential strings.
+
+Prerequisites: an empty task-owned `supabase_db_glamgenius-f15-*` server at
+17.11, local Docker context `desktop-linux`, CLI 2.120.0 with telemetry
+disabled, the official CA at its verified hash, and the TLS client image.
+Create/init the Supabase scratch directory outside Git, set database major
+17, disable seed, and start the **original** PG17 image. Then pin
+`supabase/.temp/postgres-version` to `17.11.0.004-f15-tls-20261008` for CLI
+dump clients. Never use that client image as the local server. Supply the
+operator's six explicit local paths and use `-SelfTest` before authorizing a
+new live run. The task's confirmed non-secret pooler hostname is its default.
+Do not pass a password as an argument. A new live run prompts locally only
+when all prerequisites are ready. Run one operator at a time. Cleanup removes its dedicated dump clients, SQL
+artifacts and local production copy; return the scratch pin to the original image before
+creating another empty target.
+
+[`app.operations.recovery`](../../backend/app/operations/recovery.py) provides
+the reusable fail-closed stage orchestration. It calls the real adapter
+operations, requires every nonempty artifact and successful native exit,
+requires verification, checks unchanged source/artifact manifests, and
+refuses omitted production byte proof for a nonzero object count. It keeps
+Vault/Auth authority outside ordinary parity. Its synthetic PostgreSQL test
+executes a real COPY restore and proves an intentional SQL error rolls the
+transaction back. It deliberately rejects raw CHECK differences; the Windows
+operator uses the independently executed reparse path for a PG-minor change.
+
+[`qualify_f15_mutants.py`](../../scripts/qualify_f15_mutants.py) actually
+changed code, executed the detecting tests and restored original bytes.
+All eight were killed: zero dump, failed dump, failed restore, skipped
+verification, manifest mismatch, accepted proprietary field, fabricated
+fetch timestamp, and skipped required Storage proof for a nonzero source.
+These synthetic harness tests are not described as a second live drill.
+
+### Future deployment gate — not executed by F15
+
+Before deploying current main, separately authorize a fresh verified backup,
+review the exact 16-migration chain below, qualify upgrade on a production-like
+restored copy and downgrade/refusal behavior, then explicitly authorize the
+production migration, matching application deployment and readiness checks.
+F15 did none of these future deployment steps.
+
+`d0e1f2g3h4` → `a9b0c1d2e3` → `b0c1d2e3f4` → `c1d2e3f4g5` →
+`d2e3f4g5h6` → `e3f4g5h6i7` → `f4g5h6i7j8` → `g5h6i7j8k9` →
+`h6i7j8k9l0` → `i7j8k9l0m1` → `j8k9l0m1n2` → `k9l0m1n2o3` →
+`lf1a2b3c4d` → `l0m1n2o3p4` → `m1n2o3p4q5` → `n2o3p4q5r6` →
+`o3p4q5r6s7`.
+
+### Regression and publication evidence
+
+Focused recovery/Store A/ODbL/authority qualification passed **77 tests**
+(2 existing warnings). Full backend passed **8198 tests,
+1 skipped**, and invite-required passed **17 tests**.
+All **8/8 actual mutants** were killed and original source bytes restored.
+Ruff, compileall, standalone helper syntax, Windows credential-free self-test,
+diff check and the current repository one-head/schema check passed. Gitleaks
+scanned every proposed changed file without added exclusions and found no leak.
+Whole-directory scanning also reported two unchanged public reference fixture
+identifiers already described by the repository's historical Git ignores;
+neither file nor ignore policy was changed. The commit-range Git scan is
+recorded in the publication report, matching PR scope.
+
+The full synthetic functional suite used a disposable PG16 server on tmpfs
+with fsync/synchronous_commit/full_page_writes OFF and UTC. These settings do
+not qualify crash durability and were never used for the real PG17 restore.
+The earlier partial full run was interrupted after 1820 passing tests to
+qualify the final immutable source snapshot; it is not a complete-suite result.
+Current complete results are in the validation evidence linked above.
+
+Exact-head CI run/status and the review/comment/thread snapshot belong to
+the publication report. No result
+from an earlier F14 SHA is treated as CI evidence for the F15 head.

@@ -1,0 +1,50 @@
+{
+  "checked_at_utc": "2026-10-08T19:17:57.0570316+00:00",
+  "scope": "LOCAL task-owned identities only",
+  "production_connection_performed": false,
+  "production_write": false,
+  "historical_workspace_identifier": "GlamGenius-F15-Recovery-7951c253a546448eabe84720af2f5d0c",
+  "historical_workspace_parent": "LOCALAPPDATA/Temp",
+  "historical_workspace_absent": true,
+  "historical_sql_filenames": [
+    "roles.sql",
+    "schema.sql",
+    "data.sql"
+  ],
+  "historical_sql_files_absent": true,
+  "historical_container_name": "supabase_db_glamgenius-f15-local-20261008",
+  "historical_container_absent": true,
+  "historical_volume_name": "supabase_db_glamgenius-f15-local-20261008",
+  "historical_volume_absent": true,
+  "historical_dump_image": "public.ecr.aws/supabase/postgres:17.11.0.004-f15-tls-20261008",
+  "historical_dump_clients_remaining": 0,
+  "recorded_credential_processes": [
+    {
+      "recorded_pid": 40440,
+      "absent": true,
+      "command_line_inspected": false
+    },
+    {
+      "recorded_pid": 32636,
+      "absent": true,
+      "command_line_inspected": false
+    }
+  ],
+  "empty_replacement_target_removed": {
+    "container_id": "9f4d8c81742c5a17658502e7a52af05d27628f04c1c51af790f0cebfc56f638c",
+    "created_at_utc": "2026-10-08T17:21:12.003269244Z",
+    "recreated_after_original_cleanup": true,
+    "pre_removal_counts": {
+      "auth_users": 0,
+      "vault_rows": 0,
+      "public_tables": 0,
+      "server_version": "17.11",
+      "storage_buckets": 0,
+      "storage_objects": 0
+    },
+    "reason": "Remove the subsequently recreated empty task-owned target so the historical task container/volume names are currently absent"
+  },
+  "private_production_rows_retained": false,
+  "unrelated_containers_or_volumes_removed": false,
+  "current_absence_reverified": true
+}

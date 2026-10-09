@@ -1,0 +1,60 @@
+{
+  "baseline_passed": true,
+  "executed": 8,
+  "killed": 8,
+  "all_original_bytes_restored": true,
+  "original_source_sha256": {
+    "backend/app/operations/recovery.py": "4838d68a2cab262f7002d2159b2346eac14852b881b538f36443d8b97ee7c114",
+    "backend/app/domains/off/importer.py": "652902f2e7d9bbb592a02a2784e59bbb7a44c80b7562f16b49083022ee284636"
+  },
+  "results": [
+    {
+      "mutant": "zero_dump",
+      "test": "test_zero_dump_is_rejected_before_restore",
+      "exit_code": 1,
+      "killed": true
+    },
+    {
+      "mutant": "dump_command_failed",
+      "test": "test_dump_command_failure_cannot_become_success",
+      "exit_code": 1,
+      "killed": true
+    },
+    {
+      "mutant": "restore_command_failed",
+      "test": "test_restore_command_failure_cannot_become_success",
+      "exit_code": 1,
+      "killed": true
+    },
+    {
+      "mutant": "verification_skipped",
+      "test": "test_verification_cannot_be_skipped",
+      "exit_code": 1,
+      "killed": true
+    },
+    {
+      "mutant": "manifest_mismatch",
+      "test": "test_any_manifest_mismatch_fails",
+      "exit_code": 1,
+      "killed": true
+    },
+    {
+      "mutant": "proprietary_field_accepted",
+      "test": "test_importer_rejects_proprietary_unknown_and_fetch_time_before_session",
+      "exit_code": 1,
+      "killed": true
+    },
+    {
+      "mutant": "fabricated_fetched_at",
+      "test": "test_store_a_export_destroy_recreate_import_actual_parity_and_unknown_freshness",
+      "exit_code": 1,
+      "killed": true
+    },
+    {
+      "mutant": "nonzero_storage_proof_skipped",
+      "test": "test_required_storage_proof_cannot_be_skipped_for_nonzero_source",
+      "exit_code": 1,
+      "killed": true
+    }
+  ]
+}
