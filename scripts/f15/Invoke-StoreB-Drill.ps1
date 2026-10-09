@@ -41,6 +41,7 @@ $f15Password = $null
 $f15Plaintext = $null
 $f15SafeDumpUrl = $null
 $f15Proxy = $null
+$f15DumpRunToken = $null
 $f15DumpImageId = $null
 $f15SecretPointer = [IntPtr]::Zero
 $f15TemporaryDirectory = $null
@@ -58,6 +59,23 @@ function Write-F15Progress([string]$Phase) {
     $f15Evidence.updated_at_utc = [DateTime]::UtcNow.ToString('o')
     $f15SafeJson = $f15Evidence | ConvertTo-Json -Depth 100
     [IO.File]::WriteAllText($f15ProgressPath, $f15SafeJson, [Text.UTF8Encoding]::new($false))
+}
+
+function Clear-F15OwnedDumpClients {
+    if (-not $f15OwnDumpClients -or $null -eq $f15DumpRunToken) { return }
+    $f15OwnedFilter=@('ps','-aq','--filter',('ancestor='+$f15DumpImageId),'--filter',('label=glamgenius.f15.run='+$f15DumpRunToken))
+    $f15PendingClients=Invoke-F15Native $f15Docker $f15OwnedFilter -TimeoutSeconds 30
+    Assert-F15NativeSuccess $f15PendingClients 'dump_client_cleanup'
+    $f15ClientFailures=0
+    foreach ($f15ClientId in ($f15PendingClients.Output -split "`r?`n")) {
+        if (-not $f15ClientId.Trim()) { continue }
+        if ($f15ClientId -notmatch '^[a-f0-9]{12,64}$') { throw 'DUMP_CLIENT_ID_REJECTED' }
+        try { Assert-F15NativeSuccess (Invoke-F15Native $f15Docker @('rm','-f',$f15ClientId) -TimeoutSeconds 30) 'dump_client_cleanup' }
+        catch { $f15ClientFailures++ }
+    }
+    $f15Remaining=Invoke-F15Native $f15Docker $f15OwnedFilter -TimeoutSeconds 30
+    Assert-F15NativeSuccess $f15Remaining 'dump_client_absence'
+    if ($f15ClientFailures -or $f15Remaining.Output.Trim()) { throw 'OWNED_CLIENT_CLEANUP_FAILED' }
 }
 
 function ConvertTo-F15NativeArgument([string]$Value) {
@@ -361,6 +379,7 @@ try {
     Assert-F15SourceIdentity $f15Before
     $f15SafeDumpUrl = 'postgresql://postgres.thuyrlepavzdgkvdzuos@' + $SourceHost + ':5432/postgres?sslmode=verify-full'
     $f15Proxy = Start-F15PinnedDockerProxy -Python $PythonPath -DockerPipe '\\.\pipe\dockerDesktopLinuxEngine' -Tag $f15DumpImage -Image $f15DumpImageId
+    $f15DumpRunToken = $f15Proxy.Token
     $f15Proxy.Process.StandardInput.WriteLine((@{password=$f15Plaintext} | ConvertTo-Json -Compress))
     $f15Proxy.Process.StandardInput.Flush()
     $f15ProxyAck = $f15Proxy.Process.StandardOutput.ReadLineAsync()
@@ -393,9 +412,11 @@ try {
     $f15Evidence.source_after = $f15After
     Assert-F15SourceIdentity $f15After
     if ((Get-F15ComparableManifest $f15Before $true) -cne (Get-F15ComparableManifest $f15After $true) -or $f15Before.server_version -cne $f15After.server_version) { throw 'SOURCE_MANIFEST_CHANGED_DURING_BACKUP' }
-    $f15Password.Dispose(); $f15Password = $null
-    $f15Plaintext = $null; $f15SafeDumpUrl = $null
-    $f15Evidence.credential_disposed = $true
+    Stop-F15CredentialLifetime -Password ([ref]$f15Password) -Bstr ([ref]$f15SecretPointer) -Plaintext ([ref]$f15Plaintext) -SafeDumpUrl ([ref]$f15SafeDumpUrl) -Proxy ([ref]$f15Proxy) -Evidence $f15Evidence -DumpClientCleanup { Clear-F15OwnedDumpClients }
+    if (-not $f15Evidence.credential_disposed -or -not $f15Evidence.credential_proxy_exit_verified -or -not $f15Evidence.credential_proxy_children_exit_verified -or -not $f15Evidence.credential_dump_clients_absent -or
+        $null -ne $f15Proxy -or $null -ne $f15Password -or $f15SecretPointer -ne [IntPtr]::Zero -or
+        $null -ne $f15Plaintext -or $null -ne $f15SafeDumpUrl) { throw 'CREDENTIAL_RESTORE_BOUNDARY_REJECTED' }
+    Write-F15Progress 'credential_lifetime_destroyed'
     $f15Evidence.dump_coverage = [ordered]@{}
     foreach ($f15DumpName in @('roles.sql','schema.sql','data.sql')) { $f15Evidence.dump_coverage[$f15DumpName] = Get-F15DumpCoverage (Join-Path $f15TemporaryDirectory $f15DumpName) }
     $f15Evidence.vault_contract = 'Vault credential recovery is not established by the ordinary logical database backup. External integrations requiring Vault credentials must reconnect after disaster recovery.'
@@ -464,18 +485,7 @@ try {
         # GUID-named protected SQL directory, even when the drill fails.
         $f15Cleanup = Invoke-F15IndependentCleanup ([ordered]@{
           dump_clients = {
-            if ($f15OwnDumpClients) {
-                if ($null -eq $f15Proxy) { return }
-                $f15PendingClients = Invoke-F15Native $f15Docker @('ps','-aq','--filter',('ancestor='+$f15DumpImageId),'--filter',('label=glamgenius.f15.run='+$f15Proxy.Token)) -TimeoutSeconds 30
-                Assert-F15NativeSuccess $f15PendingClients 'dump_client_cleanup'
-                $f15ClientFailures = 0
-                foreach ($f15ClientId in ($f15PendingClients.Output -split "`r?`n")) {
-                    if (-not $f15ClientId.Trim()) { continue }
-                    if ($f15ClientId -notmatch '^[a-f0-9]{12,64}$') { throw 'DUMP_CLIENT_ID_REJECTED' }
-                    try { Assert-F15NativeSuccess (Invoke-F15Native $f15Docker @('rm','-f',$f15ClientId) -TimeoutSeconds 30) 'dump_client_cleanup' } catch { $f15ClientFailures++ }
-                }
-                if ($f15ClientFailures) { throw 'OWNED_CLIENT_CLEANUP_FAILED' }
-            }
+            Clear-F15OwnedDumpClients
           }
           local_container = {
             if ($f15RestoreAttempted) {
@@ -506,17 +516,9 @@ try {
             }
           }
           credential_process = {
-            if ($null -ne $f15Password) { $f15Password.Dispose(); $f15Password = $null }
-            if ($f15SecretPointer -ne [IntPtr]::Zero) { [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($f15SecretPointer); $f15SecretPointer = [IntPtr]::Zero }
-            $f15Plaintext = $null; $f15SafeDumpUrl = $null
-            if ($null -ne $f15Proxy) {
-                try { $f15Proxy.Process.StandardInput.Close(); if (-not $f15Proxy.Process.WaitForExit(10000)) { Stop-F15OwnedProcess $f15Proxy.Process } }
-                finally { $f15Proxy.Process.Dispose() }
-            }
-            $f15Evidence.credential_disposed = $true
+            Stop-F15CredentialLifetime -Password ([ref]$f15Password) -Bstr ([ref]$f15SecretPointer) -Plaintext ([ref]$f15Plaintext) -SafeDumpUrl ([ref]$f15SafeDumpUrl) -Proxy ([ref]$f15Proxy) -Evidence $f15Evidence -DumpClientCleanup { Clear-F15OwnedDumpClients }
           }
         })
-        $f15Plaintext = $null; $f15SafeDumpUrl = $null; $f15Password = $null; $f15SecretPointer = [IntPtr]::Zero
         $f15Evidence.cleanup_failures = @($f15Cleanup.Failures)
         $f15Evidence.private_artifacts_removed = $f15Cleanup.Success
         if (-not $f15Cleanup.Success) {
@@ -526,8 +528,6 @@ try {
         if ($f15Evidence.status -like 'F15_OPEN*') { [Environment]::Exit(1) }
         [Environment]::Exit(0)
     }
-    if ($null -ne $f15Password) { $f15Password.Dispose() }
-    if ($f15SecretPointer -ne [IntPtr]::Zero) { [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($f15SecretPointer) }
-    $f15Plaintext = $null; $f15SafeDumpUrl = $null
+    Stop-F15CredentialLifetime -Password ([ref]$f15Password) -Bstr ([ref]$f15SecretPointer) -Plaintext ([ref]$f15Plaintext) -SafeDumpUrl ([ref]$f15SafeDumpUrl) -Proxy ([ref]$f15Proxy) -Evidence $f15Evidence -DumpClientCleanup { Clear-F15OwnedDumpClients }
     # The launched terminal exits with this script. No secret-bearing shell remains.
 }

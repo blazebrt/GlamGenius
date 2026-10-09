@@ -139,17 +139,33 @@ try {
     throw
 } finally {
     $f15Listener.Stop()
-    if ($f15Proxy) {
-        $ids=Invoke-F15Native $f15Docker @('ps','-aq','--filter',('label=glamgenius.f15.run='+$f15Proxy.Token))
-        foreach ($id in ($ids.Output -split "`r?`n" | Where-Object { $_ -match '^[a-f0-9]{12,64}$' })) { [void](Invoke-F15Native $f15Docker @('rm','-f',$id)) }
-        $f15Proxy.Process.StandardInput.Close()
-        if (-not $f15Proxy.Process.WaitForExit(10000)) { $f15Proxy.Process.Kill() }
-        $f15Proxy.Process.Dispose()
-        if ($f15ProxyErrors -and $f15ProxyErrors.IsCompleted -and $f15ProxyErrors.Result) { Write-Output $f15ProxyErrors.Result }
-    }
-    foreach ($p in @($f15CliChild,$f15ShellChild)) { if ($p) { if (-not $p.HasExited) { $p.Kill(); $p.WaitForExit() }; $p.Dispose() } }
-    $f15Sentinel=$null
-    [IO.File]::Delete((Join-Path $f15Root 'synthetic-dump.sql'))
+    $f15NativeSecure=$null; $f15NativeBstr=[IntPtr]::Zero; $f15NativeUrl=$null
+    $f15NativeCleanup=Invoke-F15IndependentCleanup ([ordered]@{
+        dump_clients={
+            $f15ClientFailures=0
+            foreach ($p in @($f15CliChild,$f15ShellChild)) {
+                if ($p) {
+                    try { Stop-F15OwnedProcess $p; if (-not $p.HasExited) { throw 'NATIVE_CHILD_STILL_ALIVE' }; $p.Dispose() }
+                    catch { $f15ClientFailures++ }
+                }
+            }
+            if ($f15Proxy) {
+                $ids=Invoke-F15Native $f15Docker @('ps','-aq','--filter',('label=glamgenius.f15.run='+$f15Proxy.Token))
+                Assert-F15NativeSuccess $ids 'synthetic_client_cleanup'
+                foreach ($id in ($ids.Output -split "`r?`n" | Where-Object { $_ -match '^[a-f0-9]{12,64}$' })) {
+                    try { Assert-F15NativeSuccess (Invoke-F15Native $f15Docker @('rm','-f',$id)) 'synthetic_client_cleanup' }
+                    catch { $f15ClientFailures++ }
+                }
+            }
+            if ($f15ClientFailures) { throw 'SYNTHETIC_CLIENT_CLEANUP_FAILED' }
+        }
+        local_container={};local_volume={};workspace={}
+        sql_files={[IO.File]::Delete((Join-Path $f15Root 'synthetic-dump.sql'))}
+        credential_process={
+            Stop-F15CredentialLifetime -Password ([ref]$f15NativeSecure) -Bstr ([ref]$f15NativeBstr) -Plaintext ([ref]$f15Sentinel) -SafeDumpUrl ([ref]$f15NativeUrl) -Proxy ([ref]$f15Proxy) -Evidence $f15Evidence
+        }
+    })
+    if (-not $f15NativeCleanup.Success) { throw 'NATIVE_SAFETY_CLEANUP_FAILED' }
 }
 $f15Report=@{synthetic_only=$true;production_connection=$false;tests=@($f15Results);sentinel_retained=$false;secret_values_printed=$false}
 $f15Json=$f15Report | ConvertTo-Json -Depth 10

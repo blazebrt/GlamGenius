@@ -18,6 +18,94 @@ function Stop-F15OwnedProcess([Diagnostics.Process]$Process) {
     if (-not $Process.WaitForExit(30000)) { throw 'OWNED_PROCESS_CLEANUP_FAILED' }
 }
 
+function Stop-F15CredentialLifetime {
+    param([ref]$Password, [ref]$Bstr, [ref]$Plaintext, [ref]$SafeDumpUrl,
+          [ref]$Proxy, [System.Collections.IDictionary]$Evidence,
+          [scriptblock]$DumpClientCleanup,
+          [int]$GracefulWaitMilliseconds=10000)
+    # Mutable references are cleared in the caller, including final-cleanup
+    # callbacks. A failed attempt never suppresses later destruction attempts.
+    $Evidence.credential_disposed = $false
+    if (-not $Evidence.Contains('credential_cleanup_errors')) { $Evidence.credential_cleanup_errors=@() }
+    $f15Failures = [Collections.Generic.List[string]]::new()
+    try {
+        if ($null -ne $Password.Value) { $Password.Value.Dispose(); $Password.Value=$null }
+    } catch { $f15Failures.Add('secure_string') }
+    try {
+        if ($Bstr.Value -ne [IntPtr]::Zero) {
+            [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($Bstr.Value)
+            $Bstr.Value=[IntPtr]::Zero
+        }
+    } catch { $f15Failures.Add('bstr') }
+    $Plaintext.Value=$null; $SafeDumpUrl.Value=$null
+    $Evidence.credential_dump_clients_absent=$true
+    try { if ($DumpClientCleanup) { & $DumpClientCleanup } }
+    catch { $Evidence.credential_dump_clients_absent=$false; $f15Failures.Add('dump_clients') }
+    if ($null -ne $Proxy.Value) {
+        $f15Process=$Proxy.Value.Process
+        $Evidence.credential_proxy_exit_verified=$false
+        if (-not $Proxy.Value.PSObject.Properties['OwnedChildren']) {
+            $f15Children=[Collections.Generic.List[Diagnostics.Process]]::new()
+            $Proxy.Value | Add-Member NoteProperty OwnedChildren $f15Children
+            $Proxy.Value | Add-Member NoteProperty ChildInventoryVerified $false
+            try {
+                if (-not $f15Process.HasExited) {
+                    $f15Parents=[Collections.Generic.Queue[Diagnostics.Process]]::new()
+                    $f15Parents.Enqueue($f15Process)
+                    while ($f15Parents.Count) {
+                        $f15Parent=$f15Parents.Dequeue()
+                        foreach ($f15Identity in @(Get-CimInstance Win32_Process -Filter ('ParentProcessId='+$f15Parent.Id) -Property ProcessId,ParentProcessId -ErrorAction Stop)) {
+                            try { $f15Child=[Diagnostics.Process]::GetProcessById($f15Identity.ProcessId) }
+                            catch [ArgumentException] { continue } # Child already gone.
+                            if ($f15Child.StartTime -lt $f15Parent.StartTime) { $f15Child.Dispose(); continue }
+                            $f15Children.Add($f15Child); $f15Parents.Enqueue($f15Child)
+                            if ($f15Children.Count -gt 64) { throw 'OWNED_CHILD_LIMIT_EXCEEDED' }
+                        }
+                    }
+                }
+                $Proxy.Value.ChildInventoryVerified=$true
+            } catch { $f15Failures.Add('proxy_child_inventory') }
+        }
+        try { $Proxy.Value.Channel.Close() } catch { $f15Failures.Add('proxy_stdin_close') }
+        try {
+            if (-not $f15Process.WaitForExit($GracefulWaitMilliseconds)) { $f15Failures.Add('proxy_graceful_timeout') }
+        } catch { $f15Failures.Add('proxy_graceful_wait') }
+        # Close/Wait failures must still reach exact-owned-tree termination.
+        try {
+            if (-not $f15Process.HasExited) {
+                Stop-F15OwnedProcess $f15Process
+                $Evidence.credential_proxy_forced_termination=$true
+            }
+        } catch { $f15Failures.Add('proxy_termination') }
+        try {
+            if (-not $f15Process.WaitForExit(1000) -or -not $f15Process.HasExited) { throw 'PROXY_STILL_ALIVE' }
+            $Evidence.credential_proxy_exit_verified=$true
+        } catch { $f15Failures.Add('proxy_exit_verification') }
+        $Evidence.credential_proxy_children_exit_verified=$Proxy.Value.ChildInventoryVerified
+        foreach ($f15Child in $Proxy.Value.OwnedChildren) {
+            try {
+                if (-not $f15Child.HasExited) { Stop-F15OwnedProcess $f15Child }
+                if (-not $f15Child.WaitForExit(1000) -or -not $f15Child.HasExited) { throw 'OWNED_CHILD_STILL_ALIVE' }
+            } catch { $Evidence.credential_proxy_children_exit_verified=$false; $f15Failures.Add('proxy_child_exit_verification') }
+        }
+        $Evidence.credential_proxy_child_count=$Proxy.Value.OwnedChildren.Count
+        if ($Evidence.credential_proxy_exit_verified -and $Evidence.credential_proxy_children_exit_verified) {
+            foreach ($f15Child in $Proxy.Value.OwnedChildren) { $f15Child.Dispose() }
+            try { $f15Process.Dispose(); $Proxy.Value=$null } catch { $f15Failures.Add('proxy_dispose') }
+        }
+        $f15Process=$null
+    } else { $Evidence.credential_proxy_exit_verified=$true; $Evidence.credential_proxy_children_exit_verified=$true }
+    $Evidence.credential_disposed=($null -eq $Password.Value -and $Bstr.Value -eq [IntPtr]::Zero -and
+        $null -eq $Plaintext.Value -and $null -eq $SafeDumpUrl.Value -and $null -eq $Proxy.Value -and
+        $Evidence.credential_proxy_exit_verified -and $Evidence.credential_proxy_children_exit_verified -and $Evidence.credential_dump_clients_absent)
+    if ($Evidence.credential_disposed -and -not $Evidence.Contains('credential_destroyed_at_utc')) { $Evidence.credential_destroyed_at_utc=[DateTime]::UtcNow.ToString('o') }
+    if ($f15Failures.Count) {
+        $Evidence.credential_cleanup_errors=@($Evidence.credential_cleanup_errors)+@($f15Failures)
+        throw 'CREDENTIAL_LIFETIME_CLEANUP_FAILED'
+    }
+    if (-not $Evidence.credential_disposed) { throw 'CREDENTIAL_PROCESS_STILL_ALIVE' }
+}
+
 function Invoke-F15IndependentCleanup([System.Collections.IDictionary]$Actions) {
     $f15Failures = [Collections.Generic.List[string]]::new()
     foreach ($f15Label in @('dump_clients','local_container','local_volume','sql_files','workspace','credential_process')) {
@@ -67,5 +155,5 @@ function Start-F15PinnedDockerProxy([string]$Python, [string]$DockerPipe, [strin
     if (-not $f15ReadyTask.Wait(15000)) { $f15Proxy.Kill(); throw 'PINNED_PROXY_START_FAILED' }
     $f15Ready = $f15ReadyTask.Result | ConvertFrom-Json
     if ($f15Ready.port -lt 1024 -or $f15Ready.port -gt 65535) { $f15Proxy.Kill(); throw 'PINNED_PROXY_START_FAILED' }
-    return [pscustomobject]@{Process=$f15Proxy; Host=('tcp://127.0.0.1:'+$f15Ready.port); Token=$f15Ready.token}
+    return [pscustomobject]@{Process=$f15Proxy; Channel=$f15Proxy.StandardInput; Host=('tcp://127.0.0.1:'+$f15Ready.port); Token=$f15Ready.token}
 }
