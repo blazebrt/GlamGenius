@@ -688,6 +688,11 @@ workspace. The boundary runner removed its synthetic workspace and separate
 cluster. New [mutation/native evidence](evidence/F15-corrective-mutants-2026-10-10.json)
 records all **17 source mutants killed**, seven Windows native safety checks,
 four credential-lifetime scenarios, and detecting argv/early-disposed mutants.
-Final local validation and exact-head publication/CI authority are recorded
-separately in the corrective validation evidence and publication report;
+[Final local validation](evidence/F15-corrective-validation-2026-10-10.json) passed **112 focused tests**, **8233 backend tests / 1 skipped**, and **17 invite-required tests**.
+All 17 source mutants were executed/killed, Windows native safety and
+credential-lifetime cases passed, and lint/compile/schema checks passed.
+[Final disposable-test cleanup](evidence/F15-corrective-test-cleanup-2026-10-10.json)
+removed both synthetic test clusters, their checkout volumes and the empty
+task network while preserving unrelated local PostgreSQL. Exact-head
+publication/CI authority is recorded separately in the publication report;
 formal audit closure is not inferred from this recovery document.
