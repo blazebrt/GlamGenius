@@ -79,7 +79,7 @@ manifest_result = subprocess.run(["docker", "exec", "-i", args.container, "psql"
 if manifest_result.returncode:
     raise SystemExit("LOCAL_MANIFEST_REVERIFICATION_FAILED")
 restored = json.loads(manifest_result.stdout)
-fields = ("database", "schema_context", "alembic_heads", "public_tables", "public_table_counts", "auth_users", "storage_buckets", "storage_objects", "external_integrations", "off_schema_present", "later_label_report_resources_present", "extensions", "public_indexes", "sorted_primary_id_sha256", "public_columns", "public_table_content_sha256")
+fields = ("database", "schema_context", "alembic_heads", "public_tables", "public_table_counts", "auth_users", "storage_buckets", "storage_objects", "external_integrations", "off_schema_present", "later_label_report_resources_present", "extensions", "public_indexes", "sorted_primary_id_sha256", "public_columns", "public_table_content_sha256", "public_sequences")
 for field in fields:
     if evidence["source_before"][field] != restored[field]:
         raise SystemExit("ORDINARY_MANIFEST_PARITY_FAILED: " + field)

@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 from app import config
-from app.domains.off import importer, store
+from app.domains.off import importer, local_recovery, store
 from app.operations import recovery
 from sqlalchemy import text
 from sqlalchemy.engine import make_url
@@ -172,6 +172,61 @@ def test_array_lower_bounds_are_part_of_complete_content(parity_database):
     assert before['public_table_content_sha256']!=after['public_table_content_sha256']
 
 
+@pytest.mark.parametrize('type_name,value', [
+    ('jsonb', "'null'::jsonb"), ('jsonb', "'\"null\"'::jsonb"),
+    ('jsonb', "'{}'::jsonb"), ('jsonb', "'[]'::jsonb"), ('json', "'null'::json"),
+    ('text', "''"), ('int', '0'), ('bool', 'false'),
+    ('int[]', 'ARRAY[]::int[]'), ('int[]', 'ARRAY[NULL]::int[]'),
+    ('jsonb[]', "ARRAY['null'::jsonb]"),
+])
+def test_sql_null_is_distinct_from_every_persisted_non_null_value(parity_database, type_name, value):
+    before = parity_database(f'CREATE TABLE null_probe(v {type_name}); INSERT INTO null_probe VALUES(NULL)')
+    after = parity_database(f'UPDATE null_probe SET v={value}')
+    assert before['public_table_counts'] == after['public_table_counts']
+    assert before['public_columns'] == after['public_columns']
+    assert before['public_table_content_sha256']['null_probe'] != after['public_table_content_sha256']['null_probe']
+    with pytest.raises(recovery.RecoveryFailed):
+        recovery.assert_manifest_parity(before, after)
+
+
+def test_array_elements_sql_null_distinct_from_jsonb_null(parity_database):
+    before = parity_database('CREATE TABLE null_probe(v jsonb[]); INSERT INTO null_probe VALUES(ARRAY[NULL]::jsonb[])')
+    after = parity_database("UPDATE null_probe SET v=ARRAY['null'::jsonb]")
+    assert before['public_table_content_sha256'] != after['public_table_content_sha256']
+
+
+@pytest.mark.parametrize('change', [
+    "SELECT setval('sequence_probe',77,true)",
+    "SELECT setval('sequence_probe',1,true)",
+    'ALTER SEQUENCE sequence_probe INCREMENT 2',
+    'ALTER SEQUENCE sequence_probe CACHE 7',
+    'ALTER SEQUENCE sequence_probe CYCLE',
+])
+def test_sequence_definition_and_runtime_mutations_detected(parity_database, change):
+    before = parity_database('CREATE SEQUENCE sequence_probe')
+    after = parity_database(change)
+    assert before['public_table_content_sha256'] == after['public_table_content_sha256']
+    assert before['public_columns'] == after['public_columns']
+    assert before['public_sequences'] != after['public_sequences']
+    with pytest.raises(recovery.RecoveryFailed):
+        recovery.assert_manifest_parity(before, after)
+
+
+def test_standalone_serial_identity_sequences_are_all_authority(parity_database):
+    before = parity_database('CREATE SEQUENCE standalone START 19; CREATE TABLE serial_probe(id serial)')
+    sequences = {s['name']: s for s in before['public_sequences']}
+    assert set(sequences) == {'standalone', 'serial_probe_id_seq', 'outside_eight_id_seq'}
+    assert sequences['standalone']['ownership'] == []
+    assert sequences['standalone']['last_value'] == 19 and sequences['standalone']['is_called'] is False
+    assert sequences['serial_probe_id_seq']['ownership'] == [dict(schema='public', table='serial_probe', column='id', dependency='a')]
+    assert sequences['outside_eight_id_seq']['ownership'] == [dict(schema='public', table='outside_eight', column='id', dependency='i')]
+    for omitted in sequences:
+        after = deepcopy(before)
+        after['public_sequences'] = [s for s in after['public_sequences'] if s['name'] != omitted]
+        with pytest.raises(recovery.RecoveryFailed):
+            recovery.assert_manifest_parity(before, after)
+
+
 @pytest.fixture
 def proxy_module():
     spec = importlib.util.spec_from_file_location("f15_pinned_proxy", ROOT / "scripts/f15/pinned-docker-proxy.py")
@@ -180,42 +235,119 @@ def proxy_module():
     return module
 
 
-def test_cli_generated_password_export_removed_before_docker_create(proxy_module):
-    import secrets
-    password = secrets.token_hex(24)
-    body = dict(Image="mutable:test", Cmd=["bash", "-c", f'export PGPASSWORD="{password}"\npg_dump --schema-only'], Env=[])
-    actual = proxy_module.pinned_create(body, tag="mutable:test", image="sha256:" + "a" * 64, password=password, label="synthetic")
-    assert password not in json.dumps(actual["Cmd"])
-    assert "PGPASSWORD=" + password in actual["Env"]
-    assert actual["Image"] == "sha256:" + "a" * 64
-    assert "PGSSLMODE=verify-full" in actual["Env"]
-    bad = deepcopy(body)
-    bad["Cmd"][2] += f'\necho "{password}"'
-    with pytest.raises(ValueError, match="SECRET_COMMAND_REJECTED"):
-        proxy_module.pinned_create(bad, tag="mutable:test", image="sha256:" + "a" * 64, password=password, label="synthetic")
+CLI_REQUESTS = json.loads((ROOT / 'backend/tests/fixtures/f15-cli-2.120.0-create-requests.json').read_text())
+SYNTHETIC_TARGET = dict(PGHOST='host.docker.internal', PGPORT='5432', PGUSER='postgres', PGDATABASE='postgres')
+
+
+def request_for(mode, password):
+    body = deepcopy(CLI_REQUESTS[mode])
+    body['Env'] = [v if not v.startswith('PGPASSWORD=') else 'PGPASSWORD='+password for v in body['Env']]
+    return body
+
+
+def rewrite(proxy_module, body, password):
+    return proxy_module.pinned_create(body, tag='mutable:test', image='sha256:'+'a'*64,
+                                      password=password, label='synthetic', target=SYNTHETIC_TARGET)
+
+
+@pytest.mark.parametrize('mode', ['roles', 'schema', 'data'])
+@pytest.mark.parametrize('character', ['"', "'", '\\', '$', '`', ' ', '%', '&', ';'])
+def test_cli_generated_password_export_removed_before_docker_create(proxy_module, mode, character):
+    password = 'synthetic-start'+character+'synthetic-end'
+    body = request_for(mode, password)
+    actual = rewrite(proxy_module, body, password)
+    assert actual['Cmd'] == ['-c', proxy_module.canonical_script(mode)]
+    assert password not in ''.join(actual['Cmd'])
+    assert actual['Env'].count('PGPASSWORD='+password) == 1
+    assert actual['Image'] == 'sha256:'+'a'*64
+    assert 'PGSSLMODE=verify-full' in actual['Env']
+    assert actual['Labels']['glamgenius.f15.run'] == 'synthetic'
+    assert 'default_transaction_read_only=on' in next(v for v in actual['Env'] if v.startswith('PGOPTIONS='))
+
+
+@pytest.mark.parametrize('payload', [
+    'echo "synthetic\\\"secret"', "echo 'synthetic'\\\"'secret'", "printf '%s%s' synthetic secret",
+    'export BASH_ENV=/tmp/evil', 'pg_dump --schema-only; env',
+])
+def test_shell_reconstructed_secret_commands_fail_closed(proxy_module, payload):
+    password = 'synthetic"secret'
+    body = request_for('schema', password)
+    body['Cmd'][2] += '\n'+payload
+    with pytest.raises(ValueError, match='DUMP_COMMAND_REJECTED'):
+        rewrite(proxy_module, body, password)
+
+
+@pytest.mark.parametrize('extra', ['BASH_ENV=/tmp/evil', 'PGHOST=evil.example', 'EXTRA_FLAGS=; env', 'PGPASSWORD=duplicate'])
+def test_untrusted_environment_is_refused(proxy_module, extra):
+    body = request_for('data', 'synthetic')
+    body['Env'].append(extra)
+    with pytest.raises(ValueError, match='DUMP_ENVIRONMENT_REJECTED'):
+        rewrite(proxy_module, body, 'synthetic')
+
+
+@pytest.mark.parametrize('drift', [None, 'command', 'duplicate_password', 'image', 'label'])
+def test_actual_container_inspection_requires_canonical_authority(proxy_module, monkeypatch, capsys, drift):
+    import io
+    password = 'synthetic"\\$` %&;secret'
+    expected = rewrite(proxy_module, request_for('schema', password), password)
+    actual = {'Image': expected['Image'], 'Config': deepcopy(expected)}
+    if drift == 'command':
+        actual['Config']['Cmd'][1] += '\necho "$PGPASSWORD"'
+    elif drift == 'duplicate_password':
+        actual['Config']['Env'].append('PGPASSWORD='+password)
+    elif drift == 'image':
+        actual['Image'] = 'sha256:'+'b'*64
+    elif drift == 'label':
+        actual['Config']['Labels']['glamgenius.f15.run'] = 'other'
+    payload = json.dumps(actual).encode()
+    response = io.BytesIO(b'HTTP/1.1 200 OK\r\nContent-Length: '+str(len(payload)).encode()+b'\r\n\r\n'+payload)
+    class Pipe:
+        def __enter__(self): return self
+        def __exit__(self, *args): return False
+        def write(self, value):
+            assert password.encode() not in value
+            return len(value)
+        def read(self, size): return response.read(size)
+    monkeypatch.setattr(proxy_module.io, 'FileIO', lambda *a: Pipe())
+    state = proxy_module.State('pipe', 'mutable:test', expected['Image'], 'synthetic', SYNTHETIC_TARGET)
+    state.password = password
+    if drift is None:
+        state.inspect_created('a'*64, expected, 'schema')
+        proof = json.loads(capsys.readouterr().out)
+        assert proof['canonical_dump_command_verified'] and proof['credential_present_in_container_cmd'] is False
+        assert proof['password_environment_only']
+    else:
+        with pytest.raises(ValueError, match='CREATED_CONTAINER_AUTHORITY_REJECTED'):
+            state.inspect_created('a'*64, expected, 'schema')
 
 
 def test_proxy_refuses_other_images_or_unowned_containers(proxy_module):
-    state = proxy_module.State("pipe", "tag", "sha256:" + "a" * 64, "run")
+    state = proxy_module.State("pipe", "tag", "sha256:" + "a" * 64, "run", SYNTHETIC_TARGET)
     assert not state.authorize("DELETE", "/v1.51/containers/" + "a" * 64)
     with pytest.raises(ValueError):
-        proxy_module.pinned_create(dict(Image="other", Cmd=[]), tag="tag", image=state.image, password="synthetic", label="run")
+        proxy_module.pinned_create(dict(Image="other", Cmd=[]), tag="tag", image=state.image, password="synthetic", label="run", target=SYNTHETIC_TARGET)
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("alias", ["localhost", "127.0.0.1", "db.local"])
+@pytest.mark.parametrize("alias", ["localhost", "127.0.0.1"])
 async def test_connected_same_cluster_alias_is_rejected_before_any_insert(tmp_path, monkeypatch, alias):
     from tests.test_f15_recovery import write_fixture_export
     write_fixture_export(tmp_path)
     original = make_url(config.POSTGRES_URL)
-    monkeypatch.setattr(config, "POSTGRES_URL", original.set(host=alias, database="different_textual_database").render_as_string(hide_password=False))
-    monkeypatch.setattr(config, "OFF_DATABASE_URL", original.set(host="127.0.0.1").render_as_string(hide_password=False))
+    monkeypatch.setattr(config, "OFF_DATABASE_URL", original.set(host=alias).render_as_string(hide_password=False))
+    monkeypatch.setattr(config, 'POSTGRES_URL', original.set(database='different_textual_database_test').render_as_string(hide_password=False))
     await store.dispose_off_engine()
     try:
+        await store.create_off_schema()
+        async with store.get_off_engine().begin() as connection:
+            await connection.execute(text('TRUNCATE off_data.off_products'))
+        from tests.f15_local_authority import restored_store_b_fixture
+        with restored_store_b_fixture(monkeypatch) as (target, _):
+            assert target.database != original.database
+            with pytest.raises(importer.InvalidOffExport, match="physically separate"):
+                await importer.import_export(tmp_path)
         async with store.get_off_engine().connect() as connection:
-            actual = (await connection.execute(text("SELECT system_identifier::text FROM pg_control_system()"))).scalar_one()
-        with pytest.raises(importer.InvalidOffExport, match="physically separate"):
-            await importer.import_export(tmp_path, store_b_system_identifier=actual)
+            assert (await connection.execute(text('SELECT count(*) FROM off_data.off_products'))).scalar_one() == 0
     finally:
         await store.dispose_off_engine()
 
@@ -227,5 +359,102 @@ async def test_importer_missing_cluster_authority_fails_before_session(tmp_path,
     original = make_url(config.POSTGRES_URL)
     monkeypatch.setattr(config, "OFF_DATABASE_URL", original.set(port=5433).render_as_string(hide_password=False))
     monkeypatch.setattr(importer, "get_off_sessionmaker", lambda: pytest.fail("Acquired a session without authority"))
+    monkeypatch.delenv(local_recovery.LOCAL_STORE_B_URL_ENV, raising=False)
     with pytest.raises(importer.InvalidOffExport, match="cluster authority"):
         await importer.import_export(tmp_path)
+
+
+def test_invented_identifier_api_and_cli_surface_absent():
+    import inspect
+    assert list(inspect.signature(importer.import_export).parameters) == ['directory']
+    assert '--store-b-system-identifier' not in inspect.getsource(importer.main)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('bad', ['https://db.example/postgres', 'postgresql://postgres@db.example/postgres',
+                                 'postgresql://postgres@127.0.0.1/postgres?host=evil.example'])
+async def test_nonlocal_store_b_refused_before_engine_creation(monkeypatch, bad):
+    monkeypatch.setenv(local_recovery.LOCAL_STORE_B_URL_ENV, bad)
+    monkeypatch.setattr(local_recovery, 'create_async_engine', lambda *a, **k: pytest.fail('Nonlocal connection attempted'))
+    with pytest.raises(local_recovery.LocalRecoveryAuthorityError):
+        await local_recovery.restored_store_b_authority()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('drift', ["UPDATE alembic_version SET version_num='wrong'", 'DROP TABLE accounts', 'CREATE SCHEMA off_data',
+                                  'GRANT UPDATE ON public.accounts TO f15_fixture_identity_reader',
+                                  'GRANT UPDATE(id) ON public.accounts TO f15_fixture_identity_reader'])
+async def test_wrong_restored_store_b_authority_refused(monkeypatch, drift):
+    from tests.f15_local_authority import restored_store_b_fixture
+    with restored_store_b_fixture(monkeypatch) as (_, sql):
+        sql(drift)
+        with pytest.raises(local_recovery.LocalRecoveryAuthorityError, match='mismatch'):
+            await local_recovery.restored_store_b_authority()
+
+
+def test_operator_source_table_authority_matches_importer():
+    assert tuple(json.loads((ROOT / 'backend/app/operations/accepted_store_b_public_tables.json').read_text())) == local_recovery.EXPECTED_TABLES
+
+
+@pytest.mark.asyncio
+async def test_store_b_unavailable_identity_fails_closed(monkeypatch):
+    from tests.f15_local_authority import restored_store_b_fixture
+    with restored_store_b_fixture(monkeypatch) as (_, sql):
+        sql('REVOKE EXECUTE ON FUNCTION pg_catalog.pg_control_system() FROM PUBLIC,f15_fixture_identity_reader')
+        with pytest.raises(local_recovery.LocalRecoveryAuthorityError):
+            await local_recovery.restored_store_b_authority()
+
+
+@pytest.mark.asyncio
+async def test_store_b_catalog_identity_cannot_be_shadowed(monkeypatch):
+    from tests.f15_local_authority import restored_store_b_fixture
+    with restored_store_b_fixture(monkeypatch) as (_, sql):
+        expected = sql('SELECT system_identifier::text FROM pg_catalog.pg_control_system()').strip()
+        sql("CREATE FUNCTION public.pg_control_system() RETURNS TABLE(system_identifier bigint) LANGUAGE sql AS $$ SELECT 10000000000::bigint $$;"
+            "ALTER ROLE f15_fixture_identity_reader SET search_path=public,pg_catalog")
+        actual = await local_recovery.restored_store_b_authority()
+        assert actual['system_identifier'] == expected and actual['system_identifier'] != '10000000000'
+
+
+@pytest.mark.asyncio
+async def test_store_a_unavailable_identity_fails_before_insert(monkeypatch, tmp_path):
+    from tests.f15_local_authority import restored_store_b_fixture
+    from tests.test_f15_recovery import write_fixture_export
+    write_fixture_export(tmp_path)
+    original = make_url(config.POSTGRES_URL)
+    monkeypatch.setattr(config, 'OFF_DATABASE_URL', original.render_as_string(hide_password=False))
+    monkeypatch.setattr(config, 'POSTGRES_URL', original.set(database='different_textual_database_test').render_as_string(hide_password=False))
+    monkeypatch.setattr(importer, 'text', lambda query: text('SELECT NULL::text') if 'pg_control_system' in query else text(query))
+    await store.dispose_off_engine()
+    try:
+        await store.create_off_schema()
+        async with store.get_off_engine().begin() as connection:
+            await connection.execute(text('TRUNCATE off_data.off_products'))
+        with restored_store_b_fixture(monkeypatch), pytest.raises(importer.InvalidOffExport, match='physically separate'):
+            await importer.import_export(tmp_path)
+        async with store.get_off_engine().connect() as connection:
+            assert (await connection.execute(text('SELECT count(*) FROM off_data.off_products'))).scalar_one() == 0
+    finally:
+        await store.dispose_off_engine()
+
+
+@pytest.mark.asyncio
+async def test_connected_store_b_identity_operation_read_only(monkeypatch):
+    from sqlalchemy.ext.asyncio import create_async_engine
+
+    from tests.f15_local_authority import restored_store_b_fixture
+    with restored_store_b_fixture(monkeypatch) as (target, _):
+        authority = await local_recovery.restored_store_b_authority()
+        assert authority['transaction_read_only'] and authority['default_transaction_read_only']
+        assert authority['production_session'] is False
+        assert authority['role_write_capability'] is False
+        engine = create_async_engine(target, connect_args={'server_settings': {'default_transaction_read_only': 'on'}})
+        try:
+            async with engine.connect() as connection:
+                connection = await connection.execution_options(isolation_level='REPEATABLE READ', postgresql_readonly=True)
+                async with connection.begin():
+                    assert (await connection.execute(text('SHOW transaction_read_only'))).scalar_one() == 'on'
+                    with pytest.raises(Exception, match='read-only transaction|permission denied'):
+                        await connection.execute(text("UPDATE public.alembic_version SET version_num='write-denied'"))
+        finally:
+            await engine.dispose()

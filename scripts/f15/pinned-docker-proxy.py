@@ -1,8 +1,8 @@
 """Task-only Windows Docker bridge: immutable image and environment-only password.
 
-Supabase 2.120.0 embeds its PGPASSWORD environment in the generated bash
-command. Strip that single export before Docker receives the command and put
-the secret in container Env instead. Never log HTTP bodies, errors or secrets.
+Accept only byte-for-byte Supabase 2.120.0 roles/schema/COPY-data templates.
+Build Docker commands from trusted templates, never from incoming shell text.
+The password is supplied through Env only. Never log bodies or secrets.
 The bridge is local, ephemeral, and cannot operate on pre-existing containers.
 """
 from __future__ import annotations
@@ -16,32 +16,53 @@ import sys
 import threading
 from contextlib import ExitStack
 from http.client import HTTPResponse
+from pathlib import Path
 from urllib.parse import unquote, urlsplit
 
 
-def pinned_create(body: dict, *, tag: str, image: str, password: str, label: str) -> dict:
+TEMPLATES = Path(__file__).with_name('cli-2.120.0-templates')
+TARGET_KEYS = ('PGHOST', 'PGPORT', 'PGUSER', 'PGDATABASE')
+
+
+def approved_modes() -> dict:
+    return json.loads((TEMPLATES / 'modes.json').read_text(encoding='utf-8'))
+
+
+def canonical_script(mode: str) -> str:
+    script = (TEMPLATES / (mode + '.sh')).read_text(encoding='utf-8')
+    export = 'export PGPASSWORD="$PGPASSWORD"\n'
+    if script.count(export) != 1:
+        raise ValueError('DUMP_COMMAND_REJECTED')
+    return script.replace(export, ': "${PGPASSWORD:?}"\n')
+
+
+def classify_request(body: dict, *, password: str, target: dict) -> str:
+    if (body.get('Entrypoint') not in (None, []) or not isinstance(body.get('Cmd'), list)
+            or len(body['Cmd']) != 4 or body['Cmd'][:2] != ['bash', '-c'] or body['Cmd'][3] != '--'):
+        raise ValueError('DUMP_COMMAND_REJECTED')
+    mode = next((m for m in approved_modes() if body['Cmd'][2] ==
+                 (TEMPLATES / (m + '.sh')).read_text(encoding='utf-8')), None)
+    if mode is None:
+        raise ValueError('DUMP_COMMAND_REJECTED')
+    expected = dict(approved_modes()[mode], **target, PGPASSWORD=password)
+    env = body.get('Env')
+    if (not isinstance(env, list) or any(not isinstance(v, str) or '=' not in v for v in env)
+            or len(env) != len(expected) or set(env) != {k+'='+v for k, v in expected.items()}):
+        raise ValueError('DUMP_ENVIRONMENT_REJECTED')
+    return mode
+
+
+def pinned_create(body: dict, *, tag: str, image: str, password: str, label: str, target: dict) -> dict:
     if body.get("Image") not in {tag, image} or not password:
         raise ValueError("DUMP_IMAGE_OR_CREDENTIAL_REJECTED")
-    cmd = (body.get("Entrypoint") or []) + (body.get("Cmd") or [])
-    if not isinstance(cmd, list) or len(cmd) not in {3,4} or cmd[0] not in {"bash", "/bin/bash", "sh", "/bin/sh"} or cmd[1] != '-c' or (len(cmd)==4 and cmd[3]!='--'):
-        raise ValueError("DUMP_COMMAND_REJECTED")
-    script, removed = re.subn(r'^export PGPASSWORD=.*(?:\n|$)', ': "${PGPASSWORD:?}"\n', cmd[2], flags=re.M)
-    if removed != 1 or password in script:
-        raise ValueError("SECRET_COMMAND_REJECTED")
-    body = dict(body)
-    body["Image"] = image
-    body["Entrypoint"] = ["/bin/bash"]
-    body["Cmd"] = ["-c", script]
-    env = [v for v in body.get("Env", []) if not v.startswith(("PGPASSWORD=", "PGSSLMODE=", "PGSSLROOTCERT=", "PGOPTIONS="))]
-    body["Env"] = env + ["PGPASSWORD=" + password, "PGSSLMODE=verify-full",
-                          "PGSSLROOTCERT=/etc/f15/supabase-prod-ca-2021.crt",
-                          "PGOPTIONS=-c default_transaction_read_only=on -c statement_timeout=120000"]
-    body["Labels"] = dict(body.get("Labels") or {}, **{"glamgenius.f15.run": label})
-    # Reversible password spellings must not remain in any command argument.
-    from urllib.parse import quote
-    if any(secret in json.dumps(body["Cmd"]) for secret in (password, quote(password, safe=""))):
-        raise ValueError("SECRET_COMMAND_REJECTED")
-    return body
+    mode = classify_request(body, password=password, target=target)
+    env = dict(approved_modes()[mode], **target, PGPASSWORD=password, PGSSLMODE='verify-full',
+               PGSSLROOTCERT='/etc/f15/supabase-prod-ca-2021.crt',
+               PGOPTIONS='-c default_transaction_read_only=on -c statement_timeout=120000')
+    return {'Image': image, 'Entrypoint': ['/bin/bash'], 'Cmd': ['-c', canonical_script(mode)],
+            'Env': [k+'='+v for k, v in env.items()], 'Labels': {'glamgenius.f15.run': label},
+            'AttachStdout': True, 'AttachStderr': True, 'Tty': False,
+            'HostConfig': {'NetworkMode': 'host', 'AutoRemove': True, 'RestartPolicy': {'Name': 'no'}}}
 
 
 class BufferSocket:
@@ -53,11 +74,46 @@ class BufferSocket:
 
 
 class State:
-    def __init__(self, pipe: str, tag: str, image: str, label: str):
+    def __init__(self, pipe: str, tag: str, image: str, label: str, target: dict):
         self.pipe, self.tag, self.image, self.label = pipe, tag, image, label
         self.password = ""
         self.owned: set[str] = set()
         self.lock = threading.Lock()
+        self.target = target
+
+    def inspect_created(self, identity: str, expected: dict, mode: str) -> None:
+        # Only an ID returned by this run's successful create is inspected.
+        with io.FileIO(self.pipe, 'r+') as pipe:
+            pipe.write(f'GET /containers/{identity}/json HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n'.encode())
+            chunks = []
+            while True:
+                try:
+                    chunk = pipe.read(65536)
+                except OSError:
+                    break
+                if not chunk:
+                    break
+                chunks.append(chunk)
+        response = HTTPResponse(BufferSocket(b''.join(chunks)))
+        response.begin()
+        if response.status != 200:
+            raise ValueError('CREATED_CONTAINER_AUTHORITY_REJECTED')
+        actual = json.loads(response.read())
+        config = actual['Config']
+        if (actual['Image'] != self.image or config['Cmd'] != expected['Cmd']
+                or config['Entrypoint'] != expected['Entrypoint']
+                or config['Labels'].get('glamgenius.f15.run') != self.label
+                or any(v not in config['Env'] for v in expected['Env'])
+                or config['Env'].count('PGPASSWORD='+self.password) != 1
+                or any(self.password in argument for argument in config['Cmd'])):
+            raise ValueError('CREATED_CONTAINER_AUTHORITY_REJECTED')
+        # No password or command text is emitted; exact trusted-command equality
+        # establishes independence from password-derived shell escaping.
+        with self.lock:
+            sys.stdout.write(json.dumps({'mode': mode, 'canonical_dump_command_verified': True,
+                                         'credential_present_in_container_cmd': False,
+                                         'password_environment_only': True, 'immutable_image_verified': True})+'\n')
+            sys.stdout.flush()
 
     def authorize(self, method: str, path: str) -> bool:
         path = re.sub(r'^/v[0-9.]+', '', unquote(urlsplit(path).path))
@@ -93,8 +149,11 @@ class Bridge(socketserver.StreamRequestHandler):
             body = self.rfile.read(size)
             creating = method == 'POST' and urlsplit(path).path.endswith('/containers/create')
             if creating:
-                body = json.dumps(pinned_create(json.loads(body), tag=state.tag, image=state.image,
-                                               password=state.password, label=state.label)).encode()
+                incoming = json.loads(body)
+                mode = classify_request(incoming, password=state.password, target=state.target)
+                expected = pinned_create(incoming, tag=state.tag, image=state.image,
+                                         password=state.password, label=state.label, target=state.target)
+                body = json.dumps(expected).encode()
             upgrade = headers.get('upgrade', '').lower() == 'tcp'
             headers['connection'] = 'Upgrade' if upgrade else 'close'
             headers['content-length'] = str(len(body))
@@ -134,9 +193,10 @@ class Bridge(socketserver.StreamRequestHandler):
                         raise ValueError('CONTAINER_ID_REJECTED')
                     with state.lock:
                         state.owned.add(identity)
+                    state.inspect_created(identity, expected, mode)
                 self.connection.sendall(raw)
         except Exception as error:
-            known = {'DUMP_IMAGE_OR_CREDENTIAL_REJECTED','DUMP_COMMAND_REJECTED','SECRET_COMMAND_REJECTED','DOCKER_REQUEST_REJECTED','CONTAINER_ID_REJECTED'}
+            known = {'DUMP_IMAGE_OR_CREDENTIAL_REJECTED','DUMP_COMMAND_REJECTED','DUMP_ENVIRONMENT_REJECTED','DOCKER_REQUEST_REJECTED','CONTAINER_ID_REJECTED','CREATED_CONTAINER_AUTHORITY_REJECTED'}
             code = str(error) if str(error) in known else type(error).__name__
             sys.stderr.write('F15_PROXY_REQUEST_REJECTED_' + code + '\n')
             sys.stderr.flush()
@@ -158,11 +218,19 @@ def main() -> None:
     parser.add_argument('--pipe', required=True)
     parser.add_argument('--tag', required=True)
     parser.add_argument('--image', required=True)
+    parser.add_argument('--host', required=True)
+    parser.add_argument('--port', required=True, type=int)
+    parser.add_argument('--user', required=True)
+    parser.add_argument('--database', required=True)
     args = parser.parse_args()
     if args.pipe != r'\\.\pipe\dockerDesktopLinuxEngine' or not re.fullmatch(r'sha256:[a-f0-9]{64}', args.image):
         raise SystemExit('LOCAL_DOCKER_AUTHORITY_REQUIRED')
     from uuid import uuid4
-    state = State(args.pipe, args.tag, args.image, uuid4().hex)
+    if (not 1 <= args.port <= 65535 or not re.fullmatch(r'[a-zA-Z0-9.:-]+', args.host)
+            or not re.fullmatch(r'[a-zA-Z0-9_.-]+', args.user) or not re.fullmatch(r'[a-zA-Z0-9_-]+', args.database)):
+        raise SystemExit('DUMP_TARGET_AUTHORITY_REQUIRED')
+    state = State(args.pipe, args.tag, args.image, uuid4().hex,
+                  dict(PGHOST=args.host, PGPORT=str(args.port), PGUSER=args.user, PGDATABASE=args.database))
     with Server(('127.0.0.1', 0), Bridge) as server:
         server.state = state
         sys.stdout.write(json.dumps({'port': server.server_address[1], 'token': state.label})+'\n')

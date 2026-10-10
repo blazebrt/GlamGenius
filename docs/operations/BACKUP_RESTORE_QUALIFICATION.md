@@ -489,11 +489,15 @@ creating another empty target.
 The October 9 corrections require immutable image/base-layer authority,
 the exact Dockerfile and embedded CA hashes, and TLS/read-only environment
 checks before credential entry. The CLI receives a passwordless `--db-url`
-and `PGPASSWORD` only in its child environment. Supabase 2.120.0 itself embeds
-that environment value in its generated container command, so the task-only
-[`pinned-docker-proxy.py`](../../scripts/f15/pinned-docker-proxy.py) removes that
-export before Docker receives the command, sets container environment instead,
-and replaces the mutable image with the verified immutable ID. The authenticated
+and `PGPASSWORD` only in its child environment. Actual CLI 2.120.0 create
+requests use a fixed script with a PGPASSWORD variable export and supply its
+value in container environment; dry-run output expands that value. The current
+[`pinned-docker-proxy.py`](../../scripts/f15/pinned-docker-proxy.py) accepts only
+the three captured exact roles/schema/COPY-data templates and exact approved
+environment flags. It discards incoming command text, builds the final command
+from trusted templates, pins the target and immutable image, and independently
+inspects its newly created container before allowing start. Only boolean
+command/credential attestations are output. The authenticated
 ephemeral loopback bridge can operate only on its run's containers. No password
 is supplied through PowerShell, Supabase or Docker process arguments.
 
@@ -506,12 +510,16 @@ cleanup failures, image-ID substitution and embedded-CA substitution. Its
 `-InjectArgvMutant` switch is a synthetic regression only; the production
 operator has no such switch. Never use a real credential with that harness.
 
-Corrected LOCAL Store A import requires independently obtained, non-secret
-Store B **local cluster** system identity (for example `pg_controldata` on the
-owned recovery target), supplied through `--store-b-system-identifier`. Do not
-invent or infer it from a URL. The importer obtains Store A's actual connected
-`pg_control_system()` identifier and rejects equal or unavailable identities
-before writing; it never acquires a Store B session. Local-only, empty-target,
+Corrected LOCAL Store A import derives Store B's system identity from an actual
+connection to the isolated restored target, supplied through the process-local
+`F15_LOCAL_RESTORED_STORE_B_URL` setting. An arbitrary identifier API/CLI input
+is no longer accepted. Both recovery targets must be loopback PostgreSQL URLs.
+The independent Store B connection uses a restricted role without database,
+schema, table or sequence write privileges and a read-only transaction; expected
+Alembic/table authority is checked. Each cluster's identity comes from
+`pg_catalog.pg_control_system()`. Equal, unavailable, nonlocal or wrong-generation
+authority refuses before import. No application/production Store B session is
+acquired. Local-only, empty-target,
 canonical OFF/ODbL checks remain required. Tests use genuinely separate local
 clusters and reject same-cluster aliases before insertion.
 
@@ -696,3 +704,36 @@ removed both synthetic test clusters, their checkout volumes and the empty
 task network while preserving unrelated local PostgreSQL. Exact-head
 publication/CI authority is recorded separately in the publication report;
 formal audit closure is not inferred from this recovery document.
+
+## Terminal review correction preflight — 2026-10-10
+
+The four P1s on exact PR #223 head `900a9313622b8e55636493834aa44977c1b46525`
+are accepted. Corrected manifests explicitly encode every column's SQL-nullness
+and actual public sequence state. Local Store A recovery now derives both
+physical identifiers from connected local clusters; restored B uses a restricted
+read-only reader. The Docker bridge accepts exact CLI 2.120.0 mode templates and
+inspects each actual owned container before starting it.
+
+[Local correction validation](evidence/F15-terminal-review-preflight-2026-10-10-local-validation.json)
+passed 184 focused tests, 8,300 backend tests with one skipped, and 17
+invite-required tests. All 21 source mutants were executed and killed. The
+Windows matrix includes 27 individual character/mode cases, three combined
+character cases, credential lifetime and argv/early-disposed/image/CA faults.
+No migration or historical executed evidence was changed.
+
+The fresh credential authenticated with verified TLS, but a Windows PowerShell
+5.1 JSON-array handling error stopped the source authority comparison before
+any dump. All 147 table names actually matched; PostgreSQL 17.6, Alembic
+`d0e1f2g3h4`, zero sequences and zero Storage objects were unchanged. Direct
+JSON-array assignment corrects the nested-array error, and actual Windows
+regressions accept the expected catalog and refuse table/sequence drift.
+The [failed preflight record](evidence/F15-terminal-review-preflight-2026-10-10-failure.json)
+preserves that failure without representing it as a passing drill.
+
+Credential holders, clients and the protected workspace were destroyed by the
+fail-closed cleanup. The initial permitted secure entry cannot be replayed.
+Fresh real roles/schema/COPY dumping and corrected restore parity remain
+pending an owner-authorized additional secure entry. PR #223 remains draft;
+neither its findings nor F15 are formally closed. Historical October 8 and
+earlier October 10 execution records remain immutable provenance. Production
+still runs the earlier application generation with auto-deploy OFF.

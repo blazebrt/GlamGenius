@@ -44,7 +44,7 @@ foreach ($f15Case in $f15Cases) {
         }
         $f15Start=[Diagnostics.ProcessStartInfo]::new()
         $f15Start.FileName=[IO.Path]::GetFullPath($PythonPath)
-        $f15Start.Arguments=(@($f15ProxyScript,'--pipe','\\.\pipe\dockerDesktopLinuxEngine','--tag','synthetic-lifecycle','--image',('sha256:'+('a'*64))) | ForEach-Object { ConvertTo-F15NativeArgument $_ }) -join ' '
+        $f15Start.Arguments=(@($f15ProxyScript,'--pipe','\\.\pipe\dockerDesktopLinuxEngine','--tag','synthetic-lifecycle','--image',('sha256:'+('a'*64)),'--host','127.0.0.1','--port','5432','--user','postgres','--database','postgres') | ForEach-Object { ConvertTo-F15NativeArgument $_ }) -join ' '
         $f15Start.UseShellExecute=$false; $f15Start.CreateNoWindow=$true
         $f15Start.RedirectStandardInput=$true; $f15Start.RedirectStandardOutput=$true; $f15Start.RedirectStandardError=$true
         $f15Start.EnvironmentVariables.Remove('PGPASSWORD'); $f15Start.EnvironmentVariables.Remove('PGPASSFILE')

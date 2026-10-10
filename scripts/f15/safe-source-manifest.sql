@@ -43,15 +43,37 @@ WITH public_columns AS (
         FROM pg_sequence s WHERE a.attidentity<>'' AND s.seqrelid=pg_get_serial_sequence(format('%I.%I',n.nspname,c.relname),a.attname)::regclass)
     ) AS authority,
     -- JSON text retains duplicate keys/whitespace; JSONB is canonical already.
-    CASE WHEN t.typcategory='A' THEN format('jsonb_build_object(''bounds'',array_dims(r.%I),''value'',to_jsonb(r.%I))',a.attname,a.attname)
-      WHEN t.typname='json' THEN format('to_jsonb(r.%I::text)',a.attname)
-      ELSE format('to_jsonb(r.%I)',a.attname) END AS row_value
+    format('CASE WHEN r.%I IS NULL THEN jsonb_build_object(''sql_null'',true) ELSE jsonb_build_object(''sql_null'',false,''value'',%s) END',
+      a.attname,
+      CASE WHEN t.typcategory='A' THEN format('jsonb_build_object(''bounds'',array_dims(r.%I),''value'',(SELECT coalesce(jsonb_agg(CASE WHEN f15_element IS NULL THEN jsonb_build_object(''sql_null'',true) ELSE jsonb_build_object(''sql_null'',false,''value'',to_jsonb(f15_element)) END ORDER BY f15_order),''[]''::jsonb) FROM unnest(r.%I) WITH ORDINALITY AS e(f15_element,f15_order)))',a.attname,a.attname)
+        WHEN t.typname='json' THEN format('to_jsonb(r.%I::text)',a.attname)
+        ELSE format('to_jsonb(r.%I)',a.attname) END) AS row_value
   FROM pg_attribute a JOIN pg_class c ON c.oid=a.attrelid
   JOIN pg_namespace n ON n.oid=c.relnamespace JOIN pg_type t ON t.oid=a.atttypid
   JOIN pg_namespace tn ON tn.oid=t.typnamespace LEFT JOIN pg_attrdef d ON d.adrelid=a.attrelid AND d.adnum=a.attnum
   LEFT JOIN pg_type element ON element.oid=t.typelem LEFT JOIN pg_namespace en ON en.oid=element.typnamespace
   LEFT JOIN pg_collation co ON co.oid=a.attcollation LEFT JOIN pg_namespace cn ON cn.oid=co.collnamespace
   WHERE n.nspname='public' AND c.relkind IN ('r','p') AND a.attnum>0 AND NOT a.attisdropped
+), sequence_runtime AS MATERIALIZED (
+  -- pg_sequence has definitions only. Read the relation without nextval/setval.
+  SELECT c.oid, query_to_xml(format('SELECT last_value, is_called FROM %I.%I',n.nspname,c.relname),false,true,'') AS runtime
+  FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
+  WHERE n.nspname='public' AND c.relkind='S'
+), public_sequences AS (
+  SELECT n.nspname AS schema_name, c.relname AS sequence_name,
+    jsonb_build_object('schema',n.nspname,'name',c.relname,
+      'type_schema',tn.nspname,'type_name',t.typname,
+      'start',s.seqstart,'increment',s.seqincrement,'min',s.seqmin,'max',s.seqmax,'cache',s.seqcache,'cycle',s.seqcycle,
+      'ownership',(SELECT coalesce(jsonb_agg(jsonb_build_object('schema',own_n.nspname,'table',own_c.relname,'column',own_a.attname,'dependency',d.deptype)
+          ORDER BY own_n.nspname COLLATE "C",own_c.relname COLLATE "C",own_a.attname COLLATE "C"),'[]'::jsonb)
+        FROM pg_depend d JOIN pg_class own_c ON own_c.oid=d.refobjid
+        JOIN pg_namespace own_n ON own_n.oid=own_c.relnamespace
+        JOIN pg_attribute own_a ON own_a.attrelid=d.refobjid AND own_a.attnum=d.refobjsubid
+        WHERE d.classid='pg_class'::regclass AND d.objid=c.oid AND d.refclassid='pg_class'::regclass AND d.deptype IN ('a','i')),
+      'last_value',((xpath('/row/last_value/text()',r.runtime))[1]::text)::bigint,
+      'is_called',((xpath('/row/is_called/text()',r.runtime))[1]::text)::boolean) AS authority
+  FROM sequence_runtime r JOIN pg_class c ON c.oid=r.oid JOIN pg_namespace n ON n.oid=c.relnamespace
+  JOIN pg_sequence s ON s.seqrelid=c.oid JOIN pg_type t ON t.oid=s.seqtypid JOIN pg_namespace tn ON tn.oid=t.typnamespace
 ), table_queries AS (
   SELECT c.relname AS table_name, format(
     'SELECT encode(extensions.digest(convert_to(coalesce(string_agg(h, '''' ORDER BY h COLLATE "C"), ''''), ''UTF8''), ''sha256''), ''hex'') AS digest FROM (SELECT encode(extensions.digest(convert_to(jsonb_build_array(%s)::text, ''UTF8''), ''sha256''), ''hex'') AS h FROM public.%I r) hashes',
@@ -65,6 +87,7 @@ SELECT jsonb_build_object(
   'schema_context', current_schema(),
   'connection_ssl', (SELECT ssl FROM pg_stat_ssl WHERE pid = pg_backend_pid()),
   'public_columns', (SELECT coalesce(jsonb_agg(authority ORDER BY table_name COLLATE "C",attnum),'[]'::jsonb) FROM public_columns),
+  'public_sequences', (SELECT coalesce(jsonb_agg(authority ORDER BY schema_name COLLATE "C",sequence_name COLLATE "C"),'[]'::jsonb) FROM public_sequences),
   'public_table_content_sha256', (SELECT coalesce(jsonb_object_agg(table_name,
     ((xpath('/row/digest/text()',query_to_xml(query,false,true,'')))[1]::text) ORDER BY table_name),'{}'::jsonb) FROM table_queries),
   'alembic_heads', (SELECT jsonb_agg(version_num ORDER BY version_num) FROM public.alembic_version),

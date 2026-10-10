@@ -256,11 +256,6 @@ async def separate_store_a(monkeypatch):
         target_setting = f"postgresql+asyncpg://postgres:postgres@127.0.0.1:{int(port)}/postgres"
     target = make_url(target_setting)
     assert target.host in {"localhost", "127.0.0.1", "::1"}
-    # Test fixture only: measured Store B identity, never acquired by importer.
-    url = main_url.set(drivername="postgresql", password=None)
-    env = dict(os.environ, PGPASSWORD=main_url.password or "")
-    system_id = recovery.run_checked(["psql", "-X", "-qAt", "--dbname", url.render_as_string(hide_password=False),
-                                     "-c", "SELECT system_identifier::text FROM pg_control_system()"], environment=env).strip()
     await store.dispose_off_engine()
     monkeypatch.setattr(config, "OFF_DATABASE_URL", target.render_as_string(hide_password=False))
     try:
@@ -274,7 +269,9 @@ async def separate_store_a(monkeypatch):
                 time.sleep(0.2)
         async with store.get_off_engine().begin() as connection:
             await connection.execute(text("TRUNCATE off_data.off_products"))
-        yield system_id
+        from tests.f15_local_authority import restored_store_b_fixture
+        with restored_store_b_fixture(monkeypatch):
+            yield
     finally:
         await store.dispose_off_engine()
         if owned:
@@ -285,7 +282,7 @@ async def separate_store_a(monkeypatch):
 async def test_store_a_export_destroy_recreate_import_actual_parity_and_unknown_freshness(separate_store_a, tmp_path, monkeypatch, record_testsuite_property):
     from app.shared.database import sql as store_b
     def forbidden():
-        raise AssertionError("Store B session acquired by Store A recovery")
+        raise AssertionError("Production Store B session acquired by Store A recovery")
     monkeypatch.setattr(store_b, "get_sessionmaker", forbidden)
     async with store.get_off_sessionmaker()() as session, session.begin():
         session.add_all([
@@ -299,7 +296,9 @@ async def test_store_a_export_destroy_recreate_import_actual_parity_and_unknown_
     async with engine.connect() as connection:
         assert (await connection.execute(text("SELECT to_regclass('off_data.off_products')"))).scalar() is None
     await store.create_off_schema()
-    imported = await importer.import_export(tmp_path / "before", store_b_system_identifier=separate_store_a)
+    imported = await importer.import_export(tmp_path / "before")
+    assert imported['local_store_b_authority']['transaction_read_only']
+    assert imported['local_store_b_authority']['system_identifier'] != imported['local_store_a_system_identifier']
     restored = await export(tmp_path / "after")
     assert original["sha256"] == restored["sha256"] == imported["sha256"]
     assert original["record_count"] == restored["record_count"] == 2
@@ -310,11 +309,13 @@ async def test_store_a_export_destroy_recreate_import_actual_parity_and_unknown_
         assert len(products) == 2
         assert all(product.fetched_at is None for product in products)
     with pytest.raises(importer.InvalidOffExport, match="empty"):
-        await importer.import_export(tmp_path / "before", store_b_system_identifier=separate_store_a)
+        await importer.import_export(tmp_path / "before")
     record_testsuite_property("local_store_a_recovery", json.dumps({"record_count": original["record_count"],
                     "sha256": original["sha256"], "export_destroy_recreate_import_parity": True,
                     "fetched_at": "NULL/unknown", "license": original["license"],
-                    "attribution": original["attribution"], "hosted_store_a_changed": False}))
+                    "attribution": original["attribution"], "hosted_store_a_changed": False,
+                    "connected_local_store_b_authority": imported['local_store_b_authority'],
+                    "local_store_a_system_identifier": imported['local_store_a_system_identifier']}))
 
 
 def test_actual_local_postgres_restore_is_one_transaction_and_stops_on_sql_error(tmp_path):

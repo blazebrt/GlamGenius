@@ -141,10 +141,11 @@ function Assert-F15DumpImage {
     return $f15ExpectedId
 }
 
-function Start-F15PinnedDockerProxy([string]$Python, [string]$DockerPipe, [string]$Tag, [string]$Image) {
+function Start-F15PinnedDockerProxy([string]$Python, [string]$DockerPipe, [string]$Tag, [string]$Image,
+    [string]$SourceHost, [int]$SourcePort, [string]$SourceUser, [string]$SourceDatabase) {
     $f15ProxyStart = [Diagnostics.ProcessStartInfo]::new()
     $f15ProxyStart.FileName=$Python
-    $f15ProxyStart.Arguments=(@((Join-Path $PSScriptRoot 'pinned-docker-proxy.py'),'--pipe',$DockerPipe,'--tag',$Tag,'--image',$Image) | ForEach-Object { ConvertTo-F15NativeArgument $_ }) -join ' '
+    $f15ProxyStart.Arguments=(@((Join-Path $PSScriptRoot 'pinned-docker-proxy.py'),'--pipe',$DockerPipe,'--tag',$Tag,'--image',$Image,'--host',$SourceHost,'--port',([string]$SourcePort),'--user',$SourceUser,'--database',$SourceDatabase) | ForEach-Object { ConvertTo-F15NativeArgument $_ }) -join ' '
     $f15ProxyStart.UseShellExecute=$false; $f15ProxyStart.CreateNoWindow=$true
     $f15ProxyStart.RedirectStandardInput=$true; $f15ProxyStart.RedirectStandardOutput=$true; $f15ProxyStart.RedirectStandardError=$true
     # The bridge receives this run's password through its protected stdin only.

@@ -1,0 +1,616 @@
+{
+  "status": "LOCAL_CORRECTIONS_PASS_FRESH_REAL_RECOVERY_PENDING",
+  "parent_head": "900a9313622b8e55636493834aa44977c1b46525",
+  "focused": {
+    "tests": 184,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0,
+    "passed": 184
+  },
+  "full_backend": {
+    "tests": 8301,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 1,
+    "passed": 8300
+  },
+  "invite_required": {
+    "tests": 17,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0,
+    "passed": 17
+  },
+  "final_targeted_checks": [
+    {
+      "name": "alembic_head",
+      "exit_code": 0,
+      "started_at_utc": "2026-10-10T09:49:40.994958+00:00",
+      "seconds": 1.032
+    },
+    {
+      "name": "schema_drift",
+      "exit_code": 0,
+      "started_at_utc": "2026-10-10T09:49:42.029324+00:00",
+      "seconds": 3.611
+    },
+    {
+      "name": "ruff_backend",
+      "exit_code": 0,
+      "started_at_utc": "2026-10-10T09:49:45.642486+00:00",
+      "seconds": 0.144
+    },
+    {
+      "name": "compileall",
+      "exit_code": 0,
+      "started_at_utc": "2026-10-10T09:49:45.788068+00:00",
+      "seconds": 0.185
+    },
+    {
+      "name": "focused",
+      "exit_code": 0,
+      "started_at_utc": "2026-10-10T09:49:45.976274+00:00",
+      "seconds": 26.441
+    },
+    {
+      "name": "source_mutants",
+      "exit_code": 0,
+      "started_at_utc": "2026-10-10T09:50:12.418188+00:00",
+      "seconds": 153.433
+    },
+    {
+      "name": "invite_required",
+      "exit_code": 0,
+      "started_at_utc": "2026-10-10T09:52:45.865632+00:00",
+      "seconds": 7.449
+    }
+  ],
+  "complete_backend_checks": [
+    {
+      "name": "alembic_head",
+      "exit_code": 0,
+      "started_at_utc": "2026-10-10T09:27:45.324446+00:00",
+      "seconds": 0.773
+    },
+    {
+      "name": "upgrade",
+      "exit_code": 0,
+      "started_at_utc": "2026-10-10T09:27:46.100197+00:00",
+      "seconds": 1.911
+    },
+    {
+      "name": "schema_drift",
+      "exit_code": 0,
+      "started_at_utc": "2026-10-10T09:27:48.013265+00:00",
+      "seconds": 2.734
+    },
+    {
+      "name": "ruff_backend",
+      "exit_code": 0,
+      "started_at_utc": "2026-10-10T09:27:50.749432+00:00",
+      "seconds": 0.077
+    },
+    {
+      "name": "compileall",
+      "exit_code": 0,
+      "started_at_utc": "2026-10-10T09:27:50.828671+00:00",
+      "seconds": 0.175
+    },
+    {
+      "name": "focused",
+      "exit_code": 0,
+      "started_at_utc": "2026-10-10T09:27:51.006028+00:00",
+      "seconds": 26.237
+    },
+    {
+      "name": "source_mutants",
+      "exit_code": 0,
+      "started_at_utc": "2026-10-10T09:28:17.243691+00:00",
+      "seconds": 144.878
+    },
+    {
+      "name": "full_backend",
+      "exit_code": 0,
+      "started_at_utc": "2026-10-10T09:30:42.115439+00:00",
+      "seconds": 1110.746
+    },
+    {
+      "name": "invite_required",
+      "exit_code": 0,
+      "started_at_utc": "2026-10-10T09:49:12.818769+00:00",
+      "seconds": 7.38
+    }
+  ],
+  "source_mutants": {
+    "baseline_passed": true,
+    "executed": 21,
+    "killed": 21,
+    "all_original_bytes_restored": true,
+    "original_source_sha256": {
+      "backend/app/operations/recovery.py": "fa986ee911c6213af67f480034e2378a375c35120d8869711e1d3265bbbed672",
+      "backend/app/domains/off/importer.py": "f2d72f0d056c603e5f71350fbebca87be20cbb5e0d3ebbe845dc8615db2c66e4",
+      "scripts/f15/safe-source-manifest.sql": "33ae5ffc465eaa5839f5aaaae3a9bfadbe40b23b01d8178f8ee21212cdca86a4",
+      "backend/app/domains/off/local_recovery.py": "7afb37664cb78d384b0945b7810eb5292c36cadca1595f45d1e8067f224937e6",
+      "scripts/f15/pinned-docker-proxy.py": "7b9fe743b601bc07a9b5da454f6c5d08e5929b1ad430d5434a1f434b47c9ab2f"
+    },
+    "results": [
+      {
+        "mutant": "zero_dump",
+        "test": "test_zero_dump_is_rejected_before_restore",
+        "exit_code": 1,
+        "killed": true
+      },
+      {
+        "mutant": "dump_command_failed",
+        "test": "test_dump_command_failure_cannot_become_success",
+        "exit_code": 1,
+        "killed": true
+      },
+      {
+        "mutant": "restore_command_failed",
+        "test": "test_restore_command_failure_cannot_become_success",
+        "exit_code": 1,
+        "killed": true
+      },
+      {
+        "mutant": "verification_skipped",
+        "test": "test_verification_cannot_be_skipped",
+        "exit_code": 1,
+        "killed": true
+      },
+      {
+        "mutant": "manifest_mismatch",
+        "test": "test_any_manifest_mismatch_fails",
+        "exit_code": 1,
+        "killed": true
+      },
+      {
+        "mutant": "proprietary_field_accepted",
+        "test": "test_importer_rejects_proprietary_unknown_and_fetch_time_before_session",
+        "exit_code": 1,
+        "killed": true
+      },
+      {
+        "mutant": "fabricated_fetched_at",
+        "test": "test_store_a_export_destroy_recreate_import_actual_parity_and_unknown_freshness",
+        "exit_code": 1,
+        "killed": true
+      },
+      {
+        "mutant": "nonzero_storage_proof_skipped",
+        "test": "test_required_storage_proof_cannot_be_skipped_for_nonzero_source",
+        "exit_code": 1,
+        "killed": true
+      },
+      {
+        "mutant": "connected_cluster_separation_skipped",
+        "test": "tests/test_f15_review_regressions.py::test_connected_same_cluster_alias_is_rejected_before_any_insert",
+        "exit_code": 1,
+        "killed": true
+      },
+      {
+        "mutant": "fabricated_object_binding_accepted",
+        "test": "tests/test_f15_review_regressions.py::test_object_proofs_are_exactly_bound_to_independent_source",
+        "exit_code": 1,
+        "killed": true
+      },
+      {
+        "mutant": "not_null_authority_omitted",
+        "test": "tests/test_f15_review_regressions.py::test_complete_column_authority_mutants_detected[ALTER TABLE outside_eight ALTER COLUMN value DROP NOT NULL]",
+        "exit_code": 1,
+        "killed": true
+      },
+      {
+        "mutant": "default_authority_omitted",
+        "test": "tests/test_f15_review_regressions.py::test_complete_column_authority_mutants_detected[ALTER TABLE outside_eight ALTER COLUMN value SET DEFAULT 'changed']",
+        "exit_code": 1,
+        "killed": true
+      },
+      {
+        "mutant": "identity_authority_omitted",
+        "test": "tests/test_f15_review_regressions.py::test_complete_column_authority_mutants_detected[ALTER TABLE outside_eight ALTER COLUMN id SET GENERATED ALWAYS]",
+        "exit_code": 1,
+        "killed": true
+      },
+      {
+        "mutant": "type_authority_omitted",
+        "test": "tests/test_f15_review_regressions.py::test_complete_column_authority_mutants_detected[ALTER TABLE outside_eight ALTER COLUMN value TYPE varchar(100)]",
+        "exit_code": 1,
+        "killed": true
+      },
+      {
+        "mutant": "generated_expression_authority_omitted",
+        "test": "tests/test_f15_review_regressions.py::test_generated_expression_same_ordinal_is_detected",
+        "exit_code": 1,
+        "killed": true
+      },
+      {
+        "mutant": "physical_dropped_column_slots_compared",
+        "test": "tests/test_f15_review_regressions.py::test_logical_column_order_survives_dropped_slots_and_rejects_reordering",
+        "exit_code": 1,
+        "killed": true
+      },
+      {
+        "mutant": "full_row_content_omitted",
+        "test": "tests/test_f15_review_regressions.py::test_complete_non_id_row_mutants_detected",
+        "exit_code": 1,
+        "killed": true
+      },
+      {
+        "mutant": "sql_null_markers_omitted",
+        "test": "tests/test_f15_review_regressions.py::test_sql_null_is_distinct_from_every_persisted_non_null_value",
+        "exit_code": 1,
+        "killed": true
+      },
+      {
+        "mutant": "store_b_identity_replaced_with_caller_text",
+        "test": "tests/test_f15_review_regressions.py::test_connected_same_cluster_alias_is_rejected_before_any_insert",
+        "exit_code": 1,
+        "killed": true
+      },
+      {
+        "mutant": "sequence_runtime_omitted",
+        "test": "tests/test_f15_review_regressions.py::test_sequence_definition_and_runtime_mutations_detected",
+        "exit_code": 1,
+        "killed": true
+      },
+      {
+        "mutant": "substring_only_secret_check_restored",
+        "test": "tests/test_f15_review_regressions.py::test_shell_reconstructed_secret_commands_fail_closed",
+        "exit_code": 1,
+        "killed": true
+      }
+    ]
+  },
+  "windows_final_combined_cases": [
+    {
+      "sentinel_retained": false,
+      "synthetic_character": "\"'\\$` %&;",
+      "secret_values_printed": false,
+      "dump_mode": "roles",
+      "production_connection": false,
+      "synthetic_only": true,
+      "tests": [
+        {
+          "passed": true,
+          "wrong_names_refused": true,
+          "expected_tables": 147,
+          "nonempty_sequences_refused": true,
+          "test": "native_source_authority_json_array_and_drift"
+        },
+        {
+          "test": "actual_immutable_image_base_source_ca_tls",
+          "passed": true
+        },
+        {
+          "passed": true,
+          "private_fixture_deleted": true,
+          "test": "cleanup_dump_clients_failure"
+        },
+        {
+          "passed": true,
+          "private_fixture_deleted": true,
+          "test": "cleanup_local_container_failure"
+        },
+        {
+          "passed": true,
+          "private_fixture_deleted": true,
+          "test": "cleanup_local_volume_failure"
+        },
+        {
+          "passed": true,
+          "mutant_killed": true,
+          "test": "image_tag_mutant"
+        },
+        {
+          "passed": true,
+          "mutant_killed": true,
+          "test": "image_ca_mutant"
+        },
+        {
+          "passed": true,
+          "canonical_command_proof": {
+            "mode": "roles",
+            "canonical_dump_command_verified": true,
+            "credential_present_in_container_cmd": false,
+            "password_environment_only": true,
+            "immutable_image_verified": true
+          },
+          "docker_command_observed": true,
+          "observed_owned_processes": 3,
+          "local_tls_failure_expected": true,
+          "test": "actual_task_owned_sentinel_argv_stdout_stderr_repository",
+          "docker_child_process_observed": true
+        }
+      ],
+      "executed_harness_sha256": "57e8f1caa357139010c3617f1b96ea18ad66ffca7a4e896a0b97cfc65f07ac84"
+    },
+    {
+      "sentinel_retained": false,
+      "synthetic_character": "\"'\\$` %&;",
+      "secret_values_printed": false,
+      "dump_mode": "schema",
+      "production_connection": false,
+      "synthetic_only": true,
+      "tests": [
+        {
+          "passed": true,
+          "wrong_names_refused": true,
+          "expected_tables": 147,
+          "nonempty_sequences_refused": true,
+          "test": "native_source_authority_json_array_and_drift"
+        },
+        {
+          "test": "actual_immutable_image_base_source_ca_tls",
+          "passed": true
+        },
+        {
+          "passed": true,
+          "private_fixture_deleted": true,
+          "test": "cleanup_dump_clients_failure"
+        },
+        {
+          "passed": true,
+          "private_fixture_deleted": true,
+          "test": "cleanup_local_container_failure"
+        },
+        {
+          "passed": true,
+          "private_fixture_deleted": true,
+          "test": "cleanup_local_volume_failure"
+        },
+        {
+          "passed": true,
+          "mutant_killed": true,
+          "test": "image_tag_mutant"
+        },
+        {
+          "passed": true,
+          "mutant_killed": true,
+          "test": "image_ca_mutant"
+        },
+        {
+          "passed": true,
+          "canonical_command_proof": {
+            "mode": "schema",
+            "canonical_dump_command_verified": true,
+            "credential_present_in_container_cmd": false,
+            "password_environment_only": true,
+            "immutable_image_verified": true
+          },
+          "docker_command_observed": true,
+          "observed_owned_processes": 3,
+          "local_tls_failure_expected": true,
+          "test": "actual_task_owned_sentinel_argv_stdout_stderr_repository",
+          "docker_child_process_observed": true
+        }
+      ],
+      "executed_harness_sha256": "57e8f1caa357139010c3617f1b96ea18ad66ffca7a4e896a0b97cfc65f07ac84"
+    },
+    {
+      "sentinel_retained": false,
+      "synthetic_character": "\"'\\$` %&;",
+      "secret_values_printed": false,
+      "dump_mode": "data",
+      "production_connection": false,
+      "synthetic_only": true,
+      "tests": [
+        {
+          "passed": true,
+          "wrong_names_refused": true,
+          "expected_tables": 147,
+          "nonempty_sequences_refused": true,
+          "test": "native_source_authority_json_array_and_drift"
+        },
+        {
+          "test": "actual_immutable_image_base_source_ca_tls",
+          "passed": true
+        },
+        {
+          "passed": true,
+          "private_fixture_deleted": true,
+          "test": "cleanup_dump_clients_failure"
+        },
+        {
+          "passed": true,
+          "private_fixture_deleted": true,
+          "test": "cleanup_local_container_failure"
+        },
+        {
+          "passed": true,
+          "private_fixture_deleted": true,
+          "test": "cleanup_local_volume_failure"
+        },
+        {
+          "passed": true,
+          "mutant_killed": true,
+          "test": "image_tag_mutant"
+        },
+        {
+          "passed": true,
+          "mutant_killed": true,
+          "test": "image_ca_mutant"
+        },
+        {
+          "passed": true,
+          "canonical_command_proof": {
+            "mode": "data",
+            "canonical_dump_command_verified": true,
+            "credential_present_in_container_cmd": false,
+            "password_environment_only": true,
+            "immutable_image_verified": true
+          },
+          "docker_command_observed": true,
+          "observed_owned_processes": 3,
+          "local_tls_failure_expected": true,
+          "test": "actual_task_owned_sentinel_argv_stdout_stderr_repository",
+          "docker_child_process_observed": true
+        }
+      ],
+      "executed_harness_sha256": "57e8f1caa357139010c3617f1b96ea18ad66ffca7a4e896a0b97cfc65f07ac84"
+    }
+  ],
+  "windows_original_individual_cases": 27,
+  "windows_native_argv_mutant": {
+    "production_connection": false,
+    "real_native_process_observation": true,
+    "synthetic_only": true,
+    "killed": true,
+    "executed": true
+  },
+  "credential_lifetime": {
+    "secret_retained": false,
+    "actual_operator_transition_executed": true,
+    "tests": [
+      {
+        "mutant_executed": false,
+        "mutant_killed": false,
+        "passed": true,
+        "bstr_zero_freed": true,
+        "actual_proxy_exited": true,
+        "plaintext_nulled": true,
+        "test": "graceful",
+        "cleanup_errors": [],
+        "secure_string_disposed": true,
+        "owned_children_absent": true,
+        "process_disposed_after_exit": true
+      },
+      {
+        "mutant_executed": false,
+        "mutant_killed": false,
+        "passed": true,
+        "bstr_zero_freed": true,
+        "actual_proxy_exited": true,
+        "plaintext_nulled": true,
+        "test": "stdin_close_failure",
+        "cleanup_errors": [
+          "proxy_stdin_close",
+          "proxy_graceful_timeout"
+        ],
+        "secure_string_disposed": true,
+        "owned_children_absent": true,
+        "process_disposed_after_exit": true
+      },
+      {
+        "mutant_executed": false,
+        "mutant_killed": false,
+        "passed": true,
+        "bstr_zero_freed": true,
+        "actual_proxy_exited": true,
+        "plaintext_nulled": true,
+        "test": "graceful_timeout",
+        "cleanup_errors": [
+          "proxy_graceful_timeout"
+        ],
+        "secure_string_disposed": true,
+        "owned_children_absent": true,
+        "process_disposed_after_exit": true
+      },
+      {
+        "mutant_executed": false,
+        "mutant_killed": false,
+        "passed": true,
+        "bstr_zero_freed": true,
+        "actual_proxy_exited": true,
+        "plaintext_nulled": true,
+        "test": "graceful_owned_child",
+        "cleanup_errors": [],
+        "secure_string_disposed": true,
+        "owned_children_absent": true,
+        "process_disposed_after_exit": true
+      }
+    ],
+    "secret_values_printed": false,
+    "production_connection": false,
+    "synthetic_only": true
+  },
+  "early_disposed_mutant": {
+    "secret_retained": false,
+    "actual_operator_transition_executed": true,
+    "tests": [
+      {
+        "mutant_executed": true,
+        "mutant_killed": true,
+        "passed": true,
+        "bstr_zero_freed": true,
+        "actual_proxy_exited": true,
+        "plaintext_nulled": true,
+        "test": "early_disposed_mutant",
+        "cleanup_errors": [],
+        "secure_string_disposed": true,
+        "owned_children_absent": true,
+        "process_disposed_after_exit": true
+      }
+    ],
+    "secret_values_printed": false,
+    "production_connection": false,
+    "synthetic_only": true
+  },
+  "local_test_cleanup": {
+    "production_connection": false,
+    "removed_containers": [
+      {
+        "name": "glamgenius-f15-terminal-tests-storea-20261010",
+        "id": "a906289d7cf3e00ca1695d86b7fa4354a274f1b99156f1490cf2f20e30ffb30e",
+        "removed": true
+      },
+      {
+        "name": "glamgenius-f15-terminal-tests-pg17-20261010",
+        "id": "7368ad24c8d00aae3a1657ba3607aa87d4160fd2dc4d6ed329c0377b73f2f51e",
+        "removed": true
+      }
+    ],
+    "checked_at_utc": "2026-10-10T09:56:10.7856010Z",
+    "remaining_task_test_containers": 0,
+    "unrelated_postgres_preserved": true,
+    "status": "PASS",
+    "removed_checkout_volumes": [
+      "glamgenius-f15-terminal-tests-final-checkout-20261010",
+      "glamgenius-f15-terminal-tests-qualified-checkout-20261010"
+    ]
+  },
+  "static_checks": {
+    "scanned_changed_files": 25,
+    "powerShell_parse": [
+      {
+        "errors": 0,
+        "file": "Invoke-StoreB-Drill.ps1"
+      },
+      {
+        "errors": 0,
+        "file": "Review-Safety.ps1"
+      },
+      {
+        "errors": 0,
+        "file": "Test-ReviewSafety.ps1"
+      },
+      {
+        "errors": 0,
+        "file": "Test-CredentialLifecycle.ps1"
+      }
+    ],
+    "local_execution_parent": "900a9313622b8e55636493834aa44977c1b46525",
+    "historical_executed_evidence_unchanged": true,
+    "gitleaks_leaks": 0,
+    "git_diff_check": true,
+    "historical_evidence_comparison": "No tracked docs/operations/evidence path differs from exact execution parent HEAD",
+    "gitleaks_new_exclusions": 0,
+    "status": "PASS",
+    "migration_added": false,
+    "checked_at_utc": "2026-10-10T10:02:25.8406328Z"
+  },
+  "gitleaks": "PASS; no leaks or added exclusions",
+  "final_source_mutant_hashes": {
+    "backend/app/operations/recovery.py": "fa986ee911c6213af67f480034e2378a375c35120d8869711e1d3265bbbed672",
+    "backend/app/domains/off/importer.py": "f2d72f0d056c603e5f71350fbebca87be20cbb5e0d3ebbe845dc8615db2c66e4",
+    "scripts/f15/safe-source-manifest.sql": "33ae5ffc465eaa5839f5aaaae3a9bfadbe40b23b01d8178f8ee21212cdca86a4",
+    "backend/app/domains/off/local_recovery.py": "7afb37664cb78d384b0945b7810eb5292c36cadca1595f45d1e8067f224937e6",
+    "scripts/f15/pinned-docker-proxy.py": "7b9fe743b601bc07a9b5da454f6c5d08e5929b1ad430d5434a1f434b47c9ab2f"
+  },
+  "windows_operator_sha256_after_array_correction": "154e0afcdee8b3dd096d968e6848b380ea0198a4a0e3442eae2440580be29bac",
+  "full_backend_snapshot_differs_from_final": "Final targeted run added five actual inspection regressions and stricter duplicate-secret inspection. After the live preflight stopped, actual Windows tests qualified the JSON-array correction. Final exact-head CI remains required.",
+  "production_access_during_tests": false,
+  "fresh_real_restore_passed": false,
+  "formal_closure_inferred": false
+}

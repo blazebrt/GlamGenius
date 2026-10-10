@@ -23,7 +23,7 @@ ORDINARY_FIELDS = (
     "auth_users", "storage_buckets", "storage_objects", "external_integrations",
     "off_schema_present", "later_label_report_resources_present", "extensions",
     "public_indexes", "public_constraints", "sorted_primary_id_sha256",
-    "public_columns", "public_table_content_sha256",
+    "public_columns", "public_table_content_sha256", "public_sequences",
 )
 
 
@@ -64,12 +64,13 @@ def assert_manifest_parity(source: Mapping[str, Any], restored: Mapping[str, Any
         counts = manifest.get("public_table_counts")
         digests = manifest.get("public_table_content_sha256")
         columns = manifest.get("public_columns")
+        sequences = manifest.get("public_sequences")
         if (not isinstance(tables, list) or not all(isinstance(t, str) for t in tables)
                 or len(tables) != len(set(tables)) or not isinstance(counts, dict) or not isinstance(digests, dict)
                 or set(tables) != counts.keys() or set(tables) != digests.keys()
                 or any(not isinstance(count, int) or isinstance(count, bool) or count < 0 for count in counts.values())
                 or any(not isinstance(d, str) or re.fullmatch(r"[0-9a-f]{64}", d) is None for d in digests.values())
-                or not isinstance(columns, list)):
+                or not isinstance(columns, list) or not isinstance(sequences, list)):
             raise RecoveryFailed("MANIFEST_MISMATCH")
         identities = set()
         column_tables = set()
@@ -82,6 +83,15 @@ def assert_manifest_parity(source: Mapping[str, Any], restored: Mapping[str, Any
             column_tables.add(column["table"])
         if column_tables != set(tables):
             raise RecoveryFailed("MANIFEST_MISMATCH")
+        sequence_names = set()
+        for sequence in sequences:
+            if (not isinstance(sequence, dict) or sequence.get("schema") != "public"
+                    or not isinstance(sequence.get("name"), str) or not sequence["name"]
+                    or sequence["name"] in sequence_names
+                    or not isinstance(sequence.get("last_value"), int) or isinstance(sequence.get("last_value"), bool)
+                    or not isinstance(sequence.get("is_called"), bool)):
+                raise RecoveryFailed("MANIFEST_MISMATCH")
+            sequence_names.add(sequence["name"])
     for field in ORDINARY_FIELDS:
         if field not in source or field not in restored or source[field] != restored[field]:
             raise RecoveryFailed("MANIFEST_MISMATCH")

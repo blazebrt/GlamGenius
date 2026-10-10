@@ -20,6 +20,7 @@ from sqlalchemy.engine import make_url
 from app import config
 from app.domains.off.attribution import ATTRIBUTION_TEXT, LICENSE_NAME, LICENSE_URL, SOURCE_URL
 from app.domains.off.export import DATA_FILE, LICENSE_FILE, LICENSE_NOTICE, MANIFEST_FILE
+from app.domains.off.local_recovery import LocalRecoveryAuthorityError, local_url, restored_store_b_authority
 from app.domains.off.models import OffProduct
 from app.domains.off.store import get_off_sessionmaker
 from app.domains.off.wall import OFF_FIELDS, ProprietaryFieldError
@@ -100,38 +101,39 @@ def read_export(directory: Path) -> tuple[dict[str, Any], list[dict[str, Any]]]:
 def _assert_local_separate_target() -> None:
     if config.APP_ENV not in {"test", "development"} or not config.OFF_DATABASE_URL:
         raise InvalidOffExport("Recovery requires an explicit local Store A URL")
-    off = make_url(config.OFF_DATABASE_URL)
-    main = make_url(config.POSTGRES_URL)
-    def identity(url):
-        host = "loopback" if url.host in {"localhost", "127.0.0.1", "::1"} else url.host
-        return host, url.port or 5432, url.database
+    try:
+        off = local_url(config.OFF_DATABASE_URL)
+        main = make_url(config.POSTGRES_URL)
+        def endpoint(url):
+            host = 'loopback' if url.host in {'localhost', '127.0.0.1', '::1'} else url.host
+            return host, url.port or 5432, url.database
+        # Conservative early refusal only. The independent connected-cluster
+        # comparison below remains the physical-separation authority.
+        if endpoint(off) == endpoint(main):
+            raise LocalRecoveryAuthorityError('Same application endpoint')
+    except LocalRecoveryAuthorityError:
+        raise InvalidOffExport("Recovery requires a physically separate local Store A database") from None
 
-    if off.host not in {"localhost", "127.0.0.1", "::1"} or identity(off) == identity(main):
-        raise InvalidOffExport("Recovery requires a physically separate local Store A database")
 
-
-async def import_export(directory: Path, *, store_b_system_identifier: str | None = None) -> dict[str, Any]:
-    """Require independently obtained Store B pg_control metadata, never a Store B session.
-
-    The local operator supplies the system identifier from pg_controldata on
-    the owned Store B cluster. URL spelling and database names cannot establish
-    physical separation. An absent/unavailable authority fails before import.
-    """
+async def import_export(directory: Path) -> dict[str, Any]:
+    """Compare actual local clusters using a separate read-only restored-B connection."""
     manifest, rows = read_export(directory)
     _assert_local_separate_target()
-    if not isinstance(store_b_system_identifier, str) or not re.fullmatch(r"[1-9][0-9]{9,19}", store_b_system_identifier):
-        raise InvalidOffExport("Verified local Store B cluster authority is required")
+    try:
+        store_b = await restored_store_b_authority()
+    except LocalRecoveryAuthorityError:
+        raise InvalidOffExport("Verified local Store B cluster authority is required") from None
     factory = get_off_sessionmaker()
     if factory.kw["bind"].url != make_url(config.OFF_DATABASE_URL):
         raise InvalidOffExport("Cached Store A engine does not match the recovery target")
     async with factory() as session, session.begin():
         try:
             connected = (await session.execute(text(
-                "SELECT system_identifier::text FROM pg_control_system()"
+                "SELECT system_identifier::text FROM pg_catalog.pg_control_system()"
             ))).scalar_one()
         except Exception:
             raise InvalidOffExport("Connected Store A cluster authority unavailable") from None
-        if not isinstance(connected, str) or not re.fullmatch(r"[1-9][0-9]{9,19}", connected) or connected == store_b_system_identifier:
+        if not isinstance(connected, str) or not re.fullmatch(r"[1-9][0-9]{9,19}", connected) or connected == store_b["system_identifier"]:
             raise InvalidOffExport("Recovery requires physically separate PostgreSQL clusters")
         # Excludes concurrent writers between the emptiness check and insert.
         await session.execute(text("LOCK TABLE off_data.off_products IN ACCESS EXCLUSIVE MODE"))
@@ -140,16 +142,15 @@ async def import_export(directory: Path, *, store_b_system_identifier: str | Non
         session.add_all(OffProduct(**row, fetched_at=None) for row in rows)
         await session.flush()
     return {"record_count": len(rows), "sha256": manifest["sha256"], "fetched_at": "NULL/unknown",
-            "attribution": manifest["attribution"], "license": manifest["license"]}
+            "attribution": manifest["attribution"], "license": manifest["license"],
+            "local_store_b_authority": store_b, "local_store_a_system_identifier": connected}
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("directory", type=Path)
-    parser.add_argument("--store-b-system-identifier", required=True,
-                        help="Verified local pg_controldata system identifier; never a connection string")
     args = parser.parse_args()
-    asyncio.run(import_export(args.directory, store_b_system_identifier=args.store_b_system_identifier))
+    asyncio.run(import_export(args.directory))
 
 
 if __name__ == "__main__":
