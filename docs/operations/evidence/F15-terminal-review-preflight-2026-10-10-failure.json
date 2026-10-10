@@ -1,0 +1,33 @@
+{
+  "status": "F15_OPEN_NO_DUMP_OR_RESTORE_PERFORMED",
+  "recorded_at_utc": "2026-10-10T10:04:11.836606+00:00",
+  "source_authenticated": true,
+  "source_client_tls_verified": true,
+  "source_authority_unchanged": {
+    "project": "thuyrlepavzdgkvdzuos",
+    "postgres": "17.6",
+    "alembic_heads": [
+      "d0e1f2g3h4"
+    ],
+    "public_table_count": 147,
+    "public_sequence_count": 0,
+    "storage_objects": 0
+  },
+  "failure": "Windows PowerShell 5.1 pipeline ConvertFrom-Json emits the entire JSON array as one object. Outer @() nested the expected names; exact list comparison failed even though all 147 actual names matched.",
+  "correction": "Assign decoded JSON array directly. Native regression exercises the actual authority function, accepts all expected names and rejects substituted names/nonempty sequences.",
+  "failed_executed_operator_snapshot": {
+    "path": "docs/operations/evidence/F15-executed-terminal-review-2026-10-10-failed-preflight-operator.ps1.txt",
+    "sha256": "4403d3f7ad49e4d26bf4fae59e34246212ef8bd733121aae4bcfd5ec5c43dc79",
+    "bytes": 44977
+  },
+  "credential_disposed": true,
+  "credential_destroyed_at_utc": "2026-10-10T09:55:21.2552525Z",
+  "credential_dump_clients_absent": true,
+  "credential_proxy_exit_verified": true,
+  "private_artifacts_removed": true,
+  "protected_workspace_absent": true,
+  "production_write_or_deployment": false,
+  "dump_artifacts_created": 0,
+  "recovery_qualification_passed": false,
+  "one_additional_secure_entry_requires_owner_exception": true
+}

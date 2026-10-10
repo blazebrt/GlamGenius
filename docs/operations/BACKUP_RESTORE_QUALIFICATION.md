@@ -2,7 +2,7 @@
 
 **Authority: F14 historical implementation/evidence and the dated, executed
 F15 live-source recovery evidence below. F01–F14 are CLOSED.
-F15 recovery qualification is complete. Formal finding closure is determined by
+F15 corrective recovery qualification is complete. Formal finding closure is determined by
 repository exact-tree merge/post-merge CI authority and is recorded by the audit
 closure process, not inferred from this document alone.**
 
@@ -270,12 +270,28 @@ not a real Supabase Vault encryption test or any F15 recovery evidence.
 
 ## F15 — real live-source recovery, 2026-10-08 UTC
 
-**F15 recovery qualification is complete. Formal finding closure is determined
+**F15 corrective recovery qualification is complete. Formal finding closure is determined
 by repository exact-tree merge/post-merge CI authority and is recorded by the
 audit closure process, not inferred from this document alone.**
 
 Ordinary live database parity and the required local recovery/implementation
 checks passed. Qualification does not authorize merge or deployment.
+
+The October 8 result is historical evidence for the fields it measured. PR #222
+was merged before its ready-triggered automated review completed. Independent
+review accepted all seven late findings. In particular, full contents of every
+public table and complete column-definition parity were not measured by that
+drill; it cannot establish formal F15 closure. The historical password also
+appeared in child-process argv. Capture by another process is not established,
+but at the October 9 review point the credential was potentially exposed pending authorized rotation.
+The new October 10 corrective evidence below records its replacement.
+
+Historical October 9 state: **F15 OPEN — post-merge review remediation incomplete**. No new
+live qualification or password rotation was claimed at that point. All preserved October 8
+snapshots and the separate CHECK/cleanup stages retain their original facts.
+The [dated corrective record](evidence/F15-review-remediation-2026-10-09.json)
+maps mutable source paths to exact pre-correction snapshots; the original
+provenance manifest itself remains unchanged.
 
 Machine-readable evidence: [live drill](evidence/F15-2026-10-08.json),
 [local boundaries](evidence/F15-local-boundaries.json), [validation](evidence/F15-validation.json)
@@ -444,7 +460,13 @@ syntax-checked and self-tested locally only; it did not execute the recorded
 production dump/restore, and the live backup was not repeated after credential
 destruction.
 [`safe-source-manifest.sql`](../../scripts/f15/safe-source-manifest.sql)
-queries aggregates/IDs-as-digests only, under a read-only transaction.
+now queries complete public column definitions and all-public-table row-content
+digests, along with supplementary aggregates/IDs, under a read-only transaction.
+Every persisted column contributes to a complete-row hash inside PostgreSQL;
+sorted row hashes preserve duplicate multiplicity without exporting row values.
+Unsupported types fail closed, including on an empty table. Expression hashes
+are compared exactly; CHECK-only canonical reparse does not authorize ignoring
+column/default/generated-expression differences between PG minor versions.
 [`verify-constraint-parity.py`](../../scripts/f15/verify-constraint-parity.py)
 reparses original CHECK expressions locally, fails every other mismatch and
 rolls back. Never dot-source the operator or launch it in a persistent shell:
@@ -457,12 +479,63 @@ Create/init the Supabase scratch directory outside Git, set database major
 17, disable seed, and start the **original** PG17 image. Then pin
 `supabase/.temp/postgres-version` to `17.11.0.004-f15-tls-20261008` for CLI
 dump clients. Never use that client image as the local server. Supply the
-operator's six explicit local paths and use `-SelfTest` before authorizing a
+operator's explicit local paths and use `-SelfTest` before authorizing a
 new live run. The task's confirmed non-secret pooler hostname is its default.
 Do not pass a password as an argument. A new live run prompts locally only
 when all prerequisites are ready. Run one operator at a time. Cleanup removes its dedicated dump clients, SQL
 artifacts and local production copy; return the scratch pin to the original image before
 creating another empty target.
+
+The October 9 corrections require immutable image/base-layer authority,
+the exact Dockerfile and embedded CA hashes, and TLS/read-only environment
+checks before credential entry. The CLI receives a passwordless `--db-url`
+and `PGPASSWORD` only in its child environment. Actual CLI 2.120.0 create
+requests use a fixed script with a PGPASSWORD variable export and supply its
+value in container environment; dry-run output expands that value. The current
+[`pinned-docker-proxy.py`](../../scripts/f15/pinned-docker-proxy.py) accepts only
+the three captured exact roles/schema/COPY-data templates and exact approved
+environment flags. It discards incoming command text, builds the final command
+from trusted templates, pins the target and immutable image, and independently
+inspects its newly created container before allowing start. Only boolean
+command/credential attestations are output. The authenticated
+ephemeral loopback bridge can operate only on its run's containers. No password
+is supplied through PowerShell, Supabase or Docker process arguments.
+
+[`Review-Safety.ps1`](../../scripts/f15/Review-Safety.ps1) performs six independent
+bounded cleanup attempts. A Docker/container/volume failure cannot skip protected
+SQL or workspace deletion; any failed action prevents cleanup success. The
+[`Test-ReviewSafety.ps1`](../../scripts/f15/Test-ReviewSafety.ps1) harness exercises
+actual Windows child processes with a random synthetic sentinel, independent
+cleanup failures, image-ID substitution and embedded-CA substitution. Its
+`-InjectArgvMutant` switch is a synthetic regression only; the production
+operator has no such switch. Never use a real credential with that harness.
+
+Corrected LOCAL Store A import derives Store B's system identity from an actual
+connection to the isolated restored target, supplied through the process-local
+`F15_LOCAL_RESTORED_STORE_B_URL` setting. An arbitrary identifier API/CLI input
+is no longer accepted. Both recovery targets must be loopback PostgreSQL URLs.
+The independent Store B connection uses a restricted role without database,
+schema, table or sequence write privileges and a read-only transaction; expected
+Alembic/table authority is checked. Each cluster's identity comes from
+`pg_catalog.pg_control_system()`. Equal, unavailable, nonlocal or wrong-generation
+authority refuses before import. No application/production Store B session is
+acquired. Local-only, empty-target,
+canonical OFF/ODbL checks remain required. Tests use genuinely separate local
+clusters and reject same-cluster aliases before insertion.
+
+Storage acceptance now requires a separately measured `storage_byte_manifest`
+with exact source-key SHA-256, expected byte size and expected byte SHA-256 for
+every source object. Proofs must match this source set one-to-one and match
+recovered size/digest; duplicate, missing, extra or fabricated bindings fail.
+Clear private keys and bytes must never enter committed evidence. The historical
+zero-object measurement remains historical. The corrective source measurement
+below independently confirmed zero objects again.
+
+These paragraphs describe the October 9 local implementation corrections. At
+that point credential rotation, the Render dependency inventory and a safe
+configuration reload were pending. The October 10 corrective execution below
+supersedes that operational state. Its temporary Uvicorn-only reload did not
+execute release steps that can migrate, seed or provision hosted Store A.
 
 [`app.operations.recovery`](../../backend/app/operations/recovery.py) provides
 the reusable fail-closed stage orchestration. It calls the real adapter
@@ -519,3 +592,148 @@ Current complete results are in the validation evidence linked above.
 Exact-head CI run/status and the review/comment/thread snapshot belong to
 the publication report. No result
 from an earlier F14 SHA is treated as CI evidence for the F15 head.
+
+## Corrective execution — October 10, 2026 local / October 9 UTC
+
+The [new corrective recovery record](evidence/F15-corrective-recovery-2026-10-10.json)
+supersedes the October 9 operational blocker without altering any October 8
+evidence. Its [execution provenance](evidence/F15-corrective-provenance-2026-10-10.json)
+preserves the exact operator, manifest, CHECK verifier, credential helper,
+pinned proxy and local-boundary/cluster-observer bytes actually executed.
+Repository source authority remained main `d7ba6aef68c4656d8d91c4fb6b5fc263653988e5`,
+with correction execution based on approved `8bacfcf9073d26c48068c3e4cbdf81ef791c3ec7`
+plus the specifically tested visible-column-ordinal correction below.
+
+The owner reset the Store B postgres password locally. A fresh, read-only
+`verify-full` connection succeeded with the replacement credential. Render
+reloaded its **existing build** at exact application commit
+`27f1df4a08f17321cba21b95a00a65b37ea5ce5a`; the new live deployment is
+`dep-db4jucd9fdbs73firbog`. Its verified Dockerfile default starts Uvicorn only,
+and observed startup logs reported PostgreSQL up and readiness 200 without
+`app.release`, migration, reference-data seeding or Store A provisioning.
+Both public health and readiness returned 200. Auto-deploy stayed OFF and
+the service stayed FREE. Repository main and the correction branch were not
+deployed; production schema stayed PostgreSQL 17.6 / `d0e1f2g3h4` / 147 tables.
+
+The new credential was staged as a temporary service `POSTGRES_URL` override,
+then normalized into the existing `glamgenius-production-secrets` environment
+group after the successful reload. The override was removed using save-only.
+The normal stored command
+`sh -c "python -m app.release && exec uvicorn server:app --host 0.0.0.0 --port $PORT"`
+was restored using save-only, with **no subsequent deployment**. That command
+is desired configuration for a future separately authorized release; the
+current running instance retains the safe Uvicorn-only reload command.
+
+The initial local reset handoff produced an unready Render attempt, which was
+canceled while the old healthy instance remained live. A Render copy control
+also exposed the old credential during contract inspection. The corrected
+handoff and successful provider reset replaced it. No old-password rejection
+test is claimed: the old value was not safely retained and was not recovered
+for that purpose. Provider reset plus successful new-password authentication
+and the newly started Render instance establish replacement authority; old
+sessions are not new authentication. Rotation-time local memory references,
+handoff server and clipboard were cleared. No Render API token, Supabase CLI
+token or PAT was created. The operator obtained its fresh credential through
+the local non-echoing console; no password entered argv, SQL artifacts, Git or
+the corrective evidence.
+
+The corrected operator executed real roles, schema and COPY data dumps with
+Supabase CLI 2.120.0 and the verified, immutable PG17.11 TLS dump image.
+Source-before and source-after manifests matched. After that comparison, the
+credential helper zero-freed/disposed local holders, closed the credential
+channel, verified the proxy and its owned child had exited, and verified dump
+clients absent at `2026-10-09T19:41:10.5862437Z`. Restore started later, at
+`2026-10-09T19:41:11.5281476Z`, into network-isolated local PostgreSQL 17.11.
+
+| Artifact | Bytes | SHA-256 |
+|---|---:|---|
+| `roles.sql` | 370 | `168a95a9c745af5ed4679751f90419ac9dc434240a213b03e32a06d5664c2308` |
+| `schema.sql` | 247979 | `88ac9b099e1deca8aa9298f213480e49a0d8dbf1fe7b40bfd3e55968546fd07f` |
+| `data.sql` | 171730 | `2a4768cfabcfc523eb1b2e953bb3cee7c0698b90acde631e0ba053e691a4aa05` |
+
+Backup took **48.87s**, restore **4.27s**, verification **4.28s**, and the
+combined operator interval **63.60s**. These are measured drill durations,
+not promised production RPO/RTO or a recovery SLA.
+
+All **147 tables / 452 rows** matched complete canonical row-content digests.
+All **1,679 visible columns**, **393 indexes**, **509 constraints**, extensions,
+row counts, required metadata and Alembic matched. The original schema CHECK
+expressions were reparsed on the actual destination; **43** differing
+minor-version CHECK renderings matched canonically, and the probe transaction
+rolled back with the restored catalog rechecked.
+
+The first corrected execution stopped safely because five columns in
+`label_error_reports` followed an invisible dropped-column physical slot.
+Logical dumps omit dropped slots, so physical `attnum` values compact during
+restore. Manifest `attnum` now means the ordinal of each visible column while
+all names, order, type/default/nullability/generated/identity/collation/enum
+authority and full row values remain compared. The regression accepts exact
+visible-schema replay with compacted slots and rejects reordered columns.
+Reverting this correction is an executed, killed mutant. The failed first
+attempt disposed credentials and deleted its private artifacts before the
+fresh passing execution; it is not represented as a passing drill.
+
+Production Storage was independently re-measured at **zero objects** before,
+during and after dumping; actual production object-byte recovery is **N/A**.
+The [new local-boundary proof](evidence/F15-corrective-local-boundaries-2026-10-10.json)
+executed actual delete/restore recovery of **10,528 synthetic bytes**, exactly
+bound to independent source key/size/digest authority. Corrective LOCAL Store A
+export → destroy → recreate → import → export preserved two canonical records,
+bytes, checksum, ODbL attribution and license; `fetched_at` remained NULL/unknown.
+Its actual cluster identifier `7694755765247750161` differed from the
+independently measured **actual restored Store B** identifier
+`7694754339499962405`. Import had no Store B session; hosted Store A stayed inactive.
+
+Vault source contained two rows and local logical restore contained zero;
+Vault credential recovery is not established. No Vault plaintext or hosted
+encryption key was obtained, and no Vault write/delete occurred. Source and
+restored Auth user counts were zero. Hosted signing keys, provider configuration
+and existing-session recovery remain outside ordinary database parity.
+
+The operator verified cleanup of the credential proxy/owned child, dump clients,
+local restore container and volume, all three SQL artifacts and the protected
+workspace. The boundary runner removed its synthetic workspace and separate
+cluster. New [mutation/native evidence](evidence/F15-corrective-mutants-2026-10-10.json)
+records all **17 source mutants killed**, seven Windows native safety checks,
+four credential-lifetime scenarios, and detecting argv/early-disposed mutants.
+[Final local validation](evidence/F15-corrective-validation-2026-10-10.json) passed **112 focused tests**, **8233 backend tests / 1 skipped**, and **17 invite-required tests**.
+All 17 source mutants were executed/killed, Windows native safety and
+credential-lifetime cases passed, and lint/compile/schema checks passed.
+[Final disposable-test cleanup](evidence/F15-corrective-test-cleanup-2026-10-10.json)
+removed both synthetic test clusters, their checkout volumes and the empty
+task network while preserving unrelated local PostgreSQL. Exact-head
+publication/CI authority is recorded separately in the publication report;
+formal audit closure is not inferred from this recovery document.
+
+## Terminal review correction preflight — 2026-10-10
+
+The four P1s on exact PR #223 head `900a9313622b8e55636493834aa44977c1b46525`
+are accepted. Corrected manifests explicitly encode every column's SQL-nullness
+and actual public sequence state. Local Store A recovery now derives both
+physical identifiers from connected local clusters; restored B uses a restricted
+read-only reader. The Docker bridge accepts exact CLI 2.120.0 mode templates and
+inspects each actual owned container before starting it.
+
+[Local correction validation](evidence/F15-terminal-review-preflight-2026-10-10-local-validation.json)
+passed 184 focused tests, 8,300 backend tests with one skipped, and 17
+invite-required tests. All 21 source mutants were executed and killed. The
+Windows matrix includes 27 individual character/mode cases, three combined
+character cases, credential lifetime and argv/early-disposed/image/CA faults.
+No migration or historical executed evidence was changed.
+
+The fresh credential authenticated with verified TLS, but a Windows PowerShell
+5.1 JSON-array handling error stopped the source authority comparison before
+any dump. All 147 table names actually matched; PostgreSQL 17.6, Alembic
+`d0e1f2g3h4`, zero sequences and zero Storage objects were unchanged. Direct
+JSON-array assignment corrects the nested-array error, and actual Windows
+regressions accept the expected catalog and refuse table/sequence drift.
+The [failed preflight record](evidence/F15-terminal-review-preflight-2026-10-10-failure.json)
+preserves that failure without representing it as a passing drill.
+
+Credential holders, clients and the protected workspace were destroyed by the
+fail-closed cleanup. The initial permitted secure entry cannot be replayed.
+Fresh real roles/schema/COPY dumping and corrected restore parity remain
+pending an owner-authorized additional secure entry. PR #223 remains draft;
+neither its findings nor F15 are formally closed. Historical October 8 and
+earlier October 10 execution records remain immutable provenance. Production
+still runs the earlier application generation with auto-deploy OFF.

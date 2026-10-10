@@ -10,6 +10,7 @@ import argparse
 import asyncio
 import hashlib
 import json
+import re
 from pathlib import Path
 from typing import Any
 
@@ -19,6 +20,7 @@ from sqlalchemy.engine import make_url
 from app import config
 from app.domains.off.attribution import ATTRIBUTION_TEXT, LICENSE_NAME, LICENSE_URL, SOURCE_URL
 from app.domains.off.export import DATA_FILE, LICENSE_FILE, LICENSE_NOTICE, MANIFEST_FILE
+from app.domains.off.local_recovery import LocalRecoveryAuthorityError, local_url, restored_store_b_authority
 from app.domains.off.models import OffProduct
 from app.domains.off.store import get_off_sessionmaker
 from app.domains.off.wall import OFF_FIELDS, ProprietaryFieldError
@@ -99,23 +101,40 @@ def read_export(directory: Path) -> tuple[dict[str, Any], list[dict[str, Any]]]:
 def _assert_local_separate_target() -> None:
     if config.APP_ENV not in {"test", "development"} or not config.OFF_DATABASE_URL:
         raise InvalidOffExport("Recovery requires an explicit local Store A URL")
-    off = make_url(config.OFF_DATABASE_URL)
-    main = make_url(config.POSTGRES_URL)
-    def identity(url):
-        host = "loopback" if url.host in {"localhost", "127.0.0.1", "::1"} else url.host
-        return host, url.port or 5432, url.database
-
-    if off.host not in {"localhost", "127.0.0.1", "::1"} or identity(off) == identity(main):
-        raise InvalidOffExport("Recovery requires a physically separate local Store A database")
+    try:
+        off = local_url(config.OFF_DATABASE_URL)
+        main = make_url(config.POSTGRES_URL)
+        def endpoint(url):
+            host = 'loopback' if url.host in {'localhost', '127.0.0.1', '::1'} else url.host
+            return host, url.port or 5432, url.database
+        # Conservative early refusal only. The independent connected-cluster
+        # comparison below remains the physical-separation authority.
+        if endpoint(off) == endpoint(main):
+            raise LocalRecoveryAuthorityError('Same application endpoint')
+    except LocalRecoveryAuthorityError:
+        raise InvalidOffExport("Recovery requires a physically separate local Store A database") from None
 
 
 async def import_export(directory: Path) -> dict[str, Any]:
+    """Compare actual local clusters using a separate read-only restored-B connection."""
     manifest, rows = read_export(directory)
     _assert_local_separate_target()
+    try:
+        store_b = await restored_store_b_authority()
+    except LocalRecoveryAuthorityError:
+        raise InvalidOffExport("Verified local Store B cluster authority is required") from None
     factory = get_off_sessionmaker()
     if factory.kw["bind"].url != make_url(config.OFF_DATABASE_URL):
         raise InvalidOffExport("Cached Store A engine does not match the recovery target")
     async with factory() as session, session.begin():
+        try:
+            connected = (await session.execute(text(
+                "SELECT system_identifier::text FROM pg_catalog.pg_control_system()"
+            ))).scalar_one()
+        except Exception:
+            raise InvalidOffExport("Connected Store A cluster authority unavailable") from None
+        if not isinstance(connected, str) or not re.fullmatch(r"[1-9][0-9]{9,19}", connected) or connected == store_b["system_identifier"]:
+            raise InvalidOffExport("Recovery requires physically separate PostgreSQL clusters")
         # Excludes concurrent writers between the emptiness check and insert.
         await session.execute(text("LOCK TABLE off_data.off_products IN ACCESS EXCLUSIVE MODE"))
         if (await session.execute(select(OffProduct.barcode).limit(1))).first() is not None:
@@ -123,7 +142,8 @@ async def import_export(directory: Path) -> dict[str, Any]:
         session.add_all(OffProduct(**row, fetched_at=None) for row in rows)
         await session.flush()
     return {"record_count": len(rows), "sha256": manifest["sha256"], "fetched_at": "NULL/unknown",
-            "attribution": manifest["attribution"], "license": manifest["license"]}
+            "attribution": manifest["attribution"], "license": manifest["license"],
+            "local_store_b_authority": store_b, "local_store_a_system_identifier": connected}
 
 
 def main() -> None:

@@ -1,0 +1,26 @@
+$ErrorActionPreference='Stop'
+$f15Base='C:\Users\saura\Documents\Codex\2026-10-08\work-directly-on-my-windows-pc'
+$f15Progress=Join-Path $f15Base 'outputs\F15-Corrective-2026-10-10\Real-Store-B-Attempt-2\F15-Real-Drill-Progress.json'
+$f15Evidence=Join-Path $f15Base 'outputs\F15-Corrective-2026-10-10\Restored-Store-B-Cluster-Identity-Attempt-2.json'
+$f15Container='supabase_db_glamgenius-f15-corrective-20261010'
+$f15Deadline=[DateTime]::UtcNow.AddHours(2)
+$env:DOCKER_CONTEXT='desktop-linux'
+while ([DateTime]::UtcNow -lt $f15Deadline) {
+    if (Test-Path -LiteralPath $f15Progress) {
+        try { $f15State=Get-Content -LiteralPath $f15Progress -Raw | ConvertFrom-Json } catch { Start-Sleep -Milliseconds 250; continue }
+        if ($f15State.phase -in @('privacy_safe_parity_verification','constraint_reparse_verification','real_store_b_parity_passed')) {
+            $f15Raw=& docker exec $f15Container psql -U supabase_admin -d postgres -X -qAt -v ON_ERROR_STOP=1 -c "BEGIN READ ONLY; SELECT json_build_object('system_identifier',(SELECT system_identifier::text FROM pg_control_system()),'server_version',current_setting('server_version'),'public_tables',(SELECT count(*) FROM pg_tables WHERE schemaname='public'),'alembic',(SELECT version_num FROM public.alembic_version)); COMMIT;" 2>$null
+            if ($LASTEXITCODE -eq 0) {
+                $f15Line=$f15Raw | Where-Object { $_.StartsWith('{') } | Select-Object -First 1
+                $f15Identity=$f15Line | ConvertFrom-Json
+                if ($f15Identity.server_version -ne '17.11' -or $f15Identity.public_tables -ne 147 -or $f15Identity.alembic -ne 'd0e1f2g3h4' -or $f15Identity.system_identifier -ne '7694754339499962405') { throw 'RESTORED_CLUSTER_AUTHORITY_MISMATCH' }
+                $f15Result=[ordered]@{status='PASS';measured_at_utc=[DateTime]::UtcNow.ToString('o');container=$f15Container;operator_phase_observed=$f15State.phase;credential_disposed_before_measurement=$f15State.credential_disposed;measurement='Independent read-only pg_control_system query of the actual restored cluster';identity=$f15Identity}
+                [IO.File]::WriteAllText($f15Evidence,($f15Result|ConvertTo-Json -Depth 7),[Text.UTF8Encoding]::new($false))
+                exit 0
+            }
+        }
+        if ($f15State.status -like 'F15_OPEN*') { exit 1 }
+    }
+    Start-Sleep -Milliseconds 250
+}
+exit 2

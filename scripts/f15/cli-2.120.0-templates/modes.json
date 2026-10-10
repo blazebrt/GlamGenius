@@ -1,0 +1,16 @@
+{
+  "roles": {
+    "RESERVED_ROLES": "anon|authenticated|authenticator|cli_login_.*|dashboard_user|pgbouncer|postgres|service_role|supabase_.*|pgsodium_keyholder|pgsodium_keyiduser|pgsodium_keymaker|pgtle_admin",
+    "ALLOWED_CONFIGS": "pgaudit.*|pgrst.*|session_replication_role|statement_timeout|track_io_timing",
+    "EXTRA_SED": "/^--/d"
+  },
+  "schema": {
+    "EXCLUDED_SCHEMAS": "information_schema|pg_*|_analytics|_realtime|_supavisor|auth|etl|extensions|pgbouncer|realtime|storage|supabase_functions|supabase_migrations|cron|dbdev|graphql|graphql_public|net|pgmq|pgsodium|pgsodium_masks|pgtle|repack|tiger|tiger_data|timescaledb_*|_timescaledb_*|topology|vault",
+    "EXTRA_SED": "/^--/d"
+  },
+  "data": {
+    "INCLUDED_SCHEMAS": "*",
+    "EXCLUDED_SCHEMAS": "information_schema|pg_*|graphql|graphql_public|pgsodium|pgsodium_masks|pgtle|repack|tiger|tiger_data|timescaledb_*|_timescaledb_*|topology|vault|etl|extensions|pgbouncer|realtime|supabase_migrations|_analytics|_realtime|_supavisor",
+    "EXTRA_FLAGS": "--exclude-table \"storage\".\"buckets_vectors\" --exclude-table \"storage\".\"vector_indexes\""
+  }
+}

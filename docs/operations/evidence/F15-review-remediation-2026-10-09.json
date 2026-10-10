@@ -1,0 +1,33 @@
+{
+  "schema_version": 1,
+  "purpose": "Preserve exact pre-correction source authorities without rewriting October 8 provenance",
+  "starting_main": "d7ba6aef68c4656d8d91c4fb6b5fc263653988e5",
+  "starting_tree": "5251a777b34e922a3c3d33f2e688f148a38b39e7",
+  "all_seven_findings_independently_accepted": true,
+  "historical_argv_exposure": true,
+  "compromise_established": false,
+  "rotation_authorized": false,
+  "old_credential_invalidated": false,
+  "fresh_production_drill_performed": false,
+  "f15_status": "OPEN \u2014 post-merge review remediation incomplete",
+  "preserved_source_bindings": {
+    "scripts/f15/Invoke-StoreB-Drill.ps1": {
+      "path": "docs/operations/evidence/F15-pre-correction-2026-10-09-Invoke-StoreB-Drill.ps1.txt",
+      "bytes": 34148,
+      "sha256": "857c0fd56ab0c4f523c923ea5980a46f665f5ab1ece83bdb3dfc123054bee53c",
+      "source_commit": "d7ba6aef68c4656d8d91c4fb6b5fc263653988e5"
+    },
+    "scripts/f15/safe-source-manifest.sql": {
+      "path": "docs/operations/evidence/F15-pre-correction-2026-10-09-safe-source-manifest.sql.txt",
+      "bytes": 4260,
+      "sha256": "e6c250bca77dde2c963c793795a0fac2455a8ca97f5677f30b0ac18f47f7a0ec",
+      "source_commit": "d7ba6aef68c4656d8d91c4fb6b5fc263653988e5"
+    },
+    "scripts/f15/verify-constraint-parity.py": {
+      "path": "docs/operations/evidence/F15-pre-correction-2026-10-09-verify-constraint-parity.py.txt",
+      "bytes": 8380,
+      "sha256": "53dedd0f73c54e094b99f5850a34190e4e9678bb3fa2d22fc76946a3c8cacb60",
+      "source_commit": "d7ba6aef68c4656d8d91c4fb6b5fc263653988e5"
+    }
+  }
+}

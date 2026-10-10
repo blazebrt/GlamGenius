@@ -1,0 +1,258 @@
+{
+  "source": {
+    "baseline_passed": true,
+    "executed": 17,
+    "killed": 17,
+    "all_original_bytes_restored": true,
+    "original_source_sha256": {
+      "backend/app/operations/recovery.py": "2c928227d8fd3bb16e3f89e4cace4790f68bb2018b43eaac8587917364a9be90",
+      "scripts/f15/safe-source-manifest.sql": "cbd0fb9f7306bbd240344950741ae14960e23a247468c96482f2e1cd092f6df9",
+      "backend/app/domains/off/importer.py": "3ca6a822583bf1467facea458e5fd19473b4d9f817e057865fd24d289c76bbff"
+    },
+    "results": [
+      {
+        "mutant": "zero_dump",
+        "test": "test_zero_dump_is_rejected_before_restore",
+        "exit_code": 1,
+        "killed": true
+      },
+      {
+        "mutant": "dump_command_failed",
+        "test": "test_dump_command_failure_cannot_become_success",
+        "exit_code": 1,
+        "killed": true
+      },
+      {
+        "mutant": "restore_command_failed",
+        "test": "test_restore_command_failure_cannot_become_success",
+        "exit_code": 1,
+        "killed": true
+      },
+      {
+        "mutant": "verification_skipped",
+        "test": "test_verification_cannot_be_skipped",
+        "exit_code": 1,
+        "killed": true
+      },
+      {
+        "mutant": "manifest_mismatch",
+        "test": "test_any_manifest_mismatch_fails",
+        "exit_code": 1,
+        "killed": true
+      },
+      {
+        "mutant": "proprietary_field_accepted",
+        "test": "test_importer_rejects_proprietary_unknown_and_fetch_time_before_session",
+        "exit_code": 1,
+        "killed": true
+      },
+      {
+        "mutant": "fabricated_fetched_at",
+        "test": "test_store_a_export_destroy_recreate_import_actual_parity_and_unknown_freshness",
+        "exit_code": 1,
+        "killed": true
+      },
+      {
+        "mutant": "nonzero_storage_proof_skipped",
+        "test": "test_required_storage_proof_cannot_be_skipped_for_nonzero_source",
+        "exit_code": 1,
+        "killed": true
+      },
+      {
+        "mutant": "connected_cluster_separation_skipped",
+        "test": "tests/test_f15_review_regressions.py::test_connected_same_cluster_alias_is_rejected_before_any_insert",
+        "exit_code": 1,
+        "killed": true
+      },
+      {
+        "mutant": "fabricated_object_binding_accepted",
+        "test": "tests/test_f15_review_regressions.py::test_object_proofs_are_exactly_bound_to_independent_source",
+        "exit_code": 1,
+        "killed": true
+      },
+      {
+        "mutant": "not_null_authority_omitted",
+        "test": "tests/test_f15_review_regressions.py::test_complete_column_authority_mutants_detected[ALTER TABLE outside_eight ALTER COLUMN value DROP NOT NULL]",
+        "exit_code": 1,
+        "killed": true
+      },
+      {
+        "mutant": "default_authority_omitted",
+        "test": "tests/test_f15_review_regressions.py::test_complete_column_authority_mutants_detected[ALTER TABLE outside_eight ALTER COLUMN value SET DEFAULT 'changed']",
+        "exit_code": 1,
+        "killed": true
+      },
+      {
+        "mutant": "identity_authority_omitted",
+        "test": "tests/test_f15_review_regressions.py::test_complete_column_authority_mutants_detected[ALTER TABLE outside_eight ALTER COLUMN id SET GENERATED ALWAYS]",
+        "exit_code": 1,
+        "killed": true
+      },
+      {
+        "mutant": "type_authority_omitted",
+        "test": "tests/test_f15_review_regressions.py::test_complete_column_authority_mutants_detected[ALTER TABLE outside_eight ALTER COLUMN value TYPE varchar(100)]",
+        "exit_code": 1,
+        "killed": true
+      },
+      {
+        "mutant": "generated_expression_authority_omitted",
+        "test": "tests/test_f15_review_regressions.py::test_generated_expression_same_ordinal_is_detected",
+        "exit_code": 1,
+        "killed": true
+      },
+      {
+        "mutant": "physical_dropped_column_slots_compared",
+        "test": "tests/test_f15_review_regressions.py::test_logical_column_order_survives_dropped_slots_and_rejects_reordering",
+        "exit_code": 1,
+        "killed": true
+      },
+      {
+        "mutant": "full_row_content_omitted",
+        "test": "tests/test_f15_review_regressions.py::test_complete_non_id_row_mutants_detected",
+        "exit_code": 1,
+        "killed": true
+      }
+    ]
+  },
+  "windows_native_safety": {
+    "secret_values_printed": false,
+    "synthetic_only": true,
+    "tests": [
+      {
+        "passed": true,
+        "test": "actual_immutable_image_base_source_ca_tls"
+      },
+      {
+        "test": "cleanup_dump_clients_failure",
+        "passed": true,
+        "private_fixture_deleted": true
+      },
+      {
+        "test": "cleanup_local_container_failure",
+        "passed": true,
+        "private_fixture_deleted": true
+      },
+      {
+        "test": "cleanup_local_volume_failure",
+        "passed": true,
+        "private_fixture_deleted": true
+      },
+      {
+        "test": "image_tag_mutant",
+        "passed": true,
+        "mutant_killed": true
+      },
+      {
+        "test": "image_ca_mutant",
+        "passed": true,
+        "mutant_killed": true
+      },
+      {
+        "test": "actual_task_owned_sentinel_argv_stdout_stderr_repository",
+        "docker_command_observed": true,
+        "observed_owned_processes": 3,
+        "local_tls_failure_expected": true,
+        "passed": true,
+        "docker_child_process_observed": true
+      }
+    ],
+    "production_connection": false,
+    "sentinel_retained": false
+  },
+  "credential_lifetime": {
+    "actual_operator_transition_executed": true,
+    "synthetic_only": true,
+    "tests": [
+      {
+        "cleanup_errors": [],
+        "bstr_zero_freed": true,
+        "secure_string_disposed": true,
+        "mutant_killed": false,
+        "mutant_executed": false,
+        "actual_proxy_exited": true,
+        "test": "graceful",
+        "plaintext_nulled": true,
+        "process_disposed_after_exit": true,
+        "owned_children_absent": true,
+        "passed": true
+      },
+      {
+        "cleanup_errors": [
+          "proxy_stdin_close",
+          "proxy_graceful_timeout"
+        ],
+        "bstr_zero_freed": true,
+        "secure_string_disposed": true,
+        "mutant_killed": false,
+        "mutant_executed": false,
+        "actual_proxy_exited": true,
+        "test": "stdin_close_failure",
+        "plaintext_nulled": true,
+        "process_disposed_after_exit": true,
+        "owned_children_absent": true,
+        "passed": true
+      },
+      {
+        "cleanup_errors": [
+          "proxy_graceful_timeout"
+        ],
+        "bstr_zero_freed": true,
+        "secure_string_disposed": true,
+        "mutant_killed": false,
+        "mutant_executed": false,
+        "actual_proxy_exited": true,
+        "test": "graceful_timeout",
+        "plaintext_nulled": true,
+        "process_disposed_after_exit": true,
+        "owned_children_absent": true,
+        "passed": true
+      },
+      {
+        "cleanup_errors": [],
+        "bstr_zero_freed": true,
+        "secure_string_disposed": true,
+        "mutant_killed": false,
+        "mutant_executed": false,
+        "actual_proxy_exited": true,
+        "test": "graceful_owned_child",
+        "plaintext_nulled": true,
+        "process_disposed_after_exit": true,
+        "owned_children_absent": true,
+        "passed": true
+      }
+    ],
+    "production_connection": false,
+    "secret_values_printed": false,
+    "secret_retained": false
+  },
+  "early_disposed_mutant": {
+    "actual_operator_transition_executed": true,
+    "synthetic_only": true,
+    "tests": [
+      {
+        "cleanup_errors": [],
+        "bstr_zero_freed": true,
+        "secure_string_disposed": true,
+        "mutant_killed": true,
+        "mutant_executed": true,
+        "actual_proxy_exited": true,
+        "test": "early_disposed_mutant",
+        "plaintext_nulled": true,
+        "process_disposed_after_exit": true,
+        "owned_children_absent": true,
+        "passed": true
+      }
+    ],
+    "production_connection": false,
+    "secret_values_printed": false,
+    "secret_retained": false
+  },
+  "argv_mutant": {
+    "executed": true,
+    "exit_code": 1,
+    "detected_failure": "SENTINEL_IN_OWNED_ARGV",
+    "killed": true,
+    "synthetic_only": true
+  },
+  "production_access": false
+}

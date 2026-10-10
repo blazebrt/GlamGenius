@@ -246,9 +246,7 @@ function Assert-F15SourceIdentity($Manifest) {
         if ($Manifest.public_tables -notcontains $f15ExpectedTable) { throw 'SOURCE_AUTHORITY_MISMATCH' }
     }
     if (@($Manifest.public_tables).Count -ne 147) { throw 'SOURCE_AUTHORITY_MISMATCH' }
-    # Windows PowerShell 5.1 emits a JSON array as one pipeline object. Assign
-    # it directly so @() does not wrap it in a second, nested array.
-    $f15ExpectedNames=Get-Content -LiteralPath (Join-Path $PSScriptRoot '../../backend/app/operations/accepted_store_b_public_tables.json') -Raw | ConvertFrom-Json
+    $f15ExpectedNames=@(Get-Content -LiteralPath (Join-Path $PSScriptRoot '../../backend/app/operations/accepted_store_b_public_tables.json') -Raw | ConvertFrom-Json)
     $f15ActualNames=@($Manifest.public_tables)
     [Array]::Sort($f15ActualNames,[StringComparer]::Ordinal)
     if (($f15ActualNames -join '|') -cne ($f15ExpectedNames -join '|')) { throw 'SOURCE_AUTHORITY_MISMATCH' }

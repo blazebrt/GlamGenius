@@ -1,0 +1,504 @@
+{
+  "status": "PASS",
+  "recorded_at_utc": "2026-10-10T02:04:24.671684+05:30",
+  "validated_code_and_recovery_evidence_head": "af280b702b48918c09061ba523adf362d87b4c36",
+  "validated_tree": "689982809767285f1f95c8b5bb8844b2e09534ae",
+  "final_publication_metadata_commit_recorded_separately": true,
+  "production_access_during_local_validation": false,
+  "checks": [
+    {
+      "name": "alembic_head",
+      "exit_code": 0,
+      "started_at_utc": "2026-10-10T01:41:54.592601+05:30",
+      "seconds": 1.358
+    },
+    {
+      "name": "upgrade",
+      "exit_code": 0,
+      "started_at_utc": "2026-10-10T01:41:55.954478+05:30",
+      "seconds": 3.455
+    },
+    {
+      "name": "schema_drift",
+      "exit_code": 0,
+      "started_at_utc": "2026-10-10T01:41:59.411715+05:30",
+      "seconds": 3.293
+    },
+    {
+      "name": "ruff_backend",
+      "exit_code": 0,
+      "started_at_utc": "2026-10-10T01:42:02.70508+05:30",
+      "seconds": 0.324
+    },
+    {
+      "name": "compileall",
+      "exit_code": 0,
+      "started_at_utc": "2026-10-10T01:42:03.032179+05:30",
+      "seconds": 1.544
+    },
+    {
+      "name": "focused",
+      "exit_code": 0,
+      "started_at_utc": "2026-10-10T01:42:04.578749+05:30",
+      "seconds": 19.455
+    },
+    {
+      "name": "source_mutants",
+      "exit_code": 0,
+      "started_at_utc": "2026-10-10T01:42:24.03696+05:30",
+      "seconds": 117.18
+    },
+    {
+      "name": "full_backend",
+      "exit_code": 0,
+      "started_at_utc": "2026-10-10T01:44:21.210686+05:30",
+      "seconds": 1162.408
+    },
+    {
+      "name": "invite_required",
+      "exit_code": 0,
+      "started_at_utc": "2026-10-10T02:03:43.535459+05:30",
+      "seconds": 8.753
+    }
+  ],
+  "static_checks": {
+    "diff_check": "PASS",
+    "checked_at_utc": "2026-10-09T20:17:20.3810727Z",
+    "status": "PASS",
+    "immutable_october_8_evidence_unchanged": true,
+    "powershell": [
+      {
+        "path": "scripts/f15/Invoke-StoreB-Drill.ps1",
+        "parse_errors": 0
+      },
+      {
+        "path": "scripts/f15/Review-Safety.ps1",
+        "parse_errors": 0
+      },
+      {
+        "path": "scripts/f15/Test-ReviewSafety.ps1",
+        "parse_errors": 0
+      },
+      {
+        "path": "scripts/f15/Test-CredentialLifecycle.ps1",
+        "parse_errors": 0
+      }
+    ],
+    "head": "af280b702b48918c09061ba523adf362d87b4c36",
+    "production_access": false
+  },
+  "gitleaks": {
+    "corrective_files": "PASS; no leaks; no exclusions added",
+    "corrective_execution_commit": "PASS; af280b702b48918c09061ba523adf362d87b4c36; no leaks",
+    "final_additive_publication_commit": "Separate final publication report records the completed commit-range scan."
+  },
+  "focused": {
+    "tests": 112,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0,
+    "passed": 112,
+    "report": {
+      "name": "focused-junit.xml",
+      "bytes": 16240,
+      "sha256": "69326b0b745be06df848106bc03bc3251075e3b711d2ae1e8742297e91c2fba7"
+    }
+  },
+  "full_backend": {
+    "tests": 8234,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 1,
+    "passed": 8233,
+    "report": {
+      "name": "full-backend-junit.xml",
+      "bytes": 1323136,
+      "sha256": "c4b617db63587b25354758a1492604fdc8fb54cb084fe97158ff41d13aca500f"
+    }
+  },
+  "invite_required": {
+    "tests": 17,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0,
+    "passed": 17,
+    "report": {
+      "name": "invite-junit.xml",
+      "bytes": 2516,
+      "sha256": "798d9207c1cce33ae12d562f4104a546f94f7df24eee5e248858620a3c157782"
+    }
+  },
+  "source_mutants": {
+    "baseline_passed": true,
+    "executed": 17,
+    "killed": 17,
+    "all_original_bytes_restored": true,
+    "original_source_sha256": {
+      "backend/app/operations/recovery.py": "2c928227d8fd3bb16e3f89e4cace4790f68bb2018b43eaac8587917364a9be90",
+      "scripts/f15/safe-source-manifest.sql": "cbd0fb9f7306bbd240344950741ae14960e23a247468c96482f2e1cd092f6df9",
+      "backend/app/domains/off/importer.py": "3ca6a822583bf1467facea458e5fd19473b4d9f817e057865fd24d289c76bbff"
+    },
+    "results": [
+      {
+        "mutant": "zero_dump",
+        "test": "test_zero_dump_is_rejected_before_restore",
+        "exit_code": 1,
+        "killed": true
+      },
+      {
+        "mutant": "dump_command_failed",
+        "test": "test_dump_command_failure_cannot_become_success",
+        "exit_code": 1,
+        "killed": true
+      },
+      {
+        "mutant": "restore_command_failed",
+        "test": "test_restore_command_failure_cannot_become_success",
+        "exit_code": 1,
+        "killed": true
+      },
+      {
+        "mutant": "verification_skipped",
+        "test": "test_verification_cannot_be_skipped",
+        "exit_code": 1,
+        "killed": true
+      },
+      {
+        "mutant": "manifest_mismatch",
+        "test": "test_any_manifest_mismatch_fails",
+        "exit_code": 1,
+        "killed": true
+      },
+      {
+        "mutant": "proprietary_field_accepted",
+        "test": "test_importer_rejects_proprietary_unknown_and_fetch_time_before_session",
+        "exit_code": 1,
+        "killed": true
+      },
+      {
+        "mutant": "fabricated_fetched_at",
+        "test": "test_store_a_export_destroy_recreate_import_actual_parity_and_unknown_freshness",
+        "exit_code": 1,
+        "killed": true
+      },
+      {
+        "mutant": "nonzero_storage_proof_skipped",
+        "test": "test_required_storage_proof_cannot_be_skipped_for_nonzero_source",
+        "exit_code": 1,
+        "killed": true
+      },
+      {
+        "mutant": "connected_cluster_separation_skipped",
+        "test": "tests/test_f15_review_regressions.py::test_connected_same_cluster_alias_is_rejected_before_any_insert",
+        "exit_code": 1,
+        "killed": true
+      },
+      {
+        "mutant": "fabricated_object_binding_accepted",
+        "test": "tests/test_f15_review_regressions.py::test_object_proofs_are_exactly_bound_to_independent_source",
+        "exit_code": 1,
+        "killed": true
+      },
+      {
+        "mutant": "not_null_authority_omitted",
+        "test": "tests/test_f15_review_regressions.py::test_complete_column_authority_mutants_detected[ALTER TABLE outside_eight ALTER COLUMN value DROP NOT NULL]",
+        "exit_code": 1,
+        "killed": true
+      },
+      {
+        "mutant": "default_authority_omitted",
+        "test": "tests/test_f15_review_regressions.py::test_complete_column_authority_mutants_detected[ALTER TABLE outside_eight ALTER COLUMN value SET DEFAULT 'changed']",
+        "exit_code": 1,
+        "killed": true
+      },
+      {
+        "mutant": "identity_authority_omitted",
+        "test": "tests/test_f15_review_regressions.py::test_complete_column_authority_mutants_detected[ALTER TABLE outside_eight ALTER COLUMN id SET GENERATED ALWAYS]",
+        "exit_code": 1,
+        "killed": true
+      },
+      {
+        "mutant": "type_authority_omitted",
+        "test": "tests/test_f15_review_regressions.py::test_complete_column_authority_mutants_detected[ALTER TABLE outside_eight ALTER COLUMN value TYPE varchar(100)]",
+        "exit_code": 1,
+        "killed": true
+      },
+      {
+        "mutant": "generated_expression_authority_omitted",
+        "test": "tests/test_f15_review_regressions.py::test_generated_expression_same_ordinal_is_detected",
+        "exit_code": 1,
+        "killed": true
+      },
+      {
+        "mutant": "physical_dropped_column_slots_compared",
+        "test": "tests/test_f15_review_regressions.py::test_logical_column_order_survives_dropped_slots_and_rejects_reordering",
+        "exit_code": 1,
+        "killed": true
+      },
+      {
+        "mutant": "full_row_content_omitted",
+        "test": "tests/test_f15_review_regressions.py::test_complete_non_id_row_mutants_detected",
+        "exit_code": 1,
+        "killed": true
+      }
+    ]
+  },
+  "windows_native_safety": {
+    "secret_values_printed": false,
+    "synthetic_only": true,
+    "tests": [
+      {
+        "passed": true,
+        "test": "actual_immutable_image_base_source_ca_tls"
+      },
+      {
+        "test": "cleanup_dump_clients_failure",
+        "passed": true,
+        "private_fixture_deleted": true
+      },
+      {
+        "test": "cleanup_local_container_failure",
+        "passed": true,
+        "private_fixture_deleted": true
+      },
+      {
+        "test": "cleanup_local_volume_failure",
+        "passed": true,
+        "private_fixture_deleted": true
+      },
+      {
+        "test": "image_tag_mutant",
+        "passed": true,
+        "mutant_killed": true
+      },
+      {
+        "test": "image_ca_mutant",
+        "passed": true,
+        "mutant_killed": true
+      },
+      {
+        "test": "actual_task_owned_sentinel_argv_stdout_stderr_repository",
+        "docker_command_observed": true,
+        "observed_owned_processes": 3,
+        "local_tls_failure_expected": true,
+        "passed": true,
+        "docker_child_process_observed": true
+      }
+    ],
+    "production_connection": false,
+    "sentinel_retained": false
+  },
+  "windows_credential_lifetime": {
+    "actual_operator_transition_executed": true,
+    "synthetic_only": true,
+    "tests": [
+      {
+        "cleanup_errors": [],
+        "bstr_zero_freed": true,
+        "secure_string_disposed": true,
+        "mutant_killed": false,
+        "mutant_executed": false,
+        "actual_proxy_exited": true,
+        "test": "graceful",
+        "plaintext_nulled": true,
+        "process_disposed_after_exit": true,
+        "owned_children_absent": true,
+        "passed": true
+      },
+      {
+        "cleanup_errors": [
+          "proxy_stdin_close",
+          "proxy_graceful_timeout"
+        ],
+        "bstr_zero_freed": true,
+        "secure_string_disposed": true,
+        "mutant_killed": false,
+        "mutant_executed": false,
+        "actual_proxy_exited": true,
+        "test": "stdin_close_failure",
+        "plaintext_nulled": true,
+        "process_disposed_after_exit": true,
+        "owned_children_absent": true,
+        "passed": true
+      },
+      {
+        "cleanup_errors": [
+          "proxy_graceful_timeout"
+        ],
+        "bstr_zero_freed": true,
+        "secure_string_disposed": true,
+        "mutant_killed": false,
+        "mutant_executed": false,
+        "actual_proxy_exited": true,
+        "test": "graceful_timeout",
+        "plaintext_nulled": true,
+        "process_disposed_after_exit": true,
+        "owned_children_absent": true,
+        "passed": true
+      },
+      {
+        "cleanup_errors": [],
+        "bstr_zero_freed": true,
+        "secure_string_disposed": true,
+        "mutant_killed": false,
+        "mutant_executed": false,
+        "actual_proxy_exited": true,
+        "test": "graceful_owned_child",
+        "plaintext_nulled": true,
+        "process_disposed_after_exit": true,
+        "owned_children_absent": true,
+        "passed": true
+      }
+    ],
+    "production_connection": false,
+    "secret_values_printed": false,
+    "secret_retained": false
+  },
+  "windows_argv_and_early_disposed_mutants": "Executed and detected; bindings retained in F15-corrective-mutants-2026-10-10.json",
+  "private_recovery_absence": {
+    "checked_at_utc": "2026-10-09T19:54:15.7059559Z",
+    "attempts": [
+      {
+        "attempt": "Real-Store-B",
+        "protected_workspace_absent": true,
+        "sql_artifacts_absent": true,
+        "credential_proxy_exit_verified": true,
+        "credential_proxy_children_exit_verified": true,
+        "dump_clients_absent_at_boundary": true,
+        "operator_private_cleanup_passed": true
+      },
+      {
+        "attempt": "Real-Store-B-Attempt-2",
+        "protected_workspace_absent": true,
+        "sql_artifacts_absent": true,
+        "credential_proxy_exit_verified": true,
+        "credential_proxy_children_exit_verified": true,
+        "dump_clients_absent_at_boundary": true,
+        "operator_private_cleanup_passed": true
+      }
+    ],
+    "operator_and_observer_processes": [
+      {
+        "pid": 26496,
+        "absent": true
+      },
+      {
+        "pid": 15212,
+        "absent": true
+      },
+      {
+        "pid": 15404,
+        "absent": true
+      },
+      {
+        "pid": 39932,
+        "absent": true
+      }
+    ],
+    "dump_clients_absent": true,
+    "real_restore_container_absent": true,
+    "real_restore_volume_absent": true,
+    "production_access": false
+  },
+  "final_local_test_cleanup": {
+    "status": "PASS",
+    "completed_at_utc": "2026-10-09T20:34:15.5612523Z",
+    "removed_containers": [
+      {
+        "name": "glamgenius-f15-corrective-tests-storea-20261010",
+        "id": "823862d2bddc6b85017fb6c8e700b61575f2c4d555732de2028d93e90e105763",
+        "removed": true,
+        "data_storage": "tmpfs"
+      },
+      {
+        "name": "glamgenius-f15-corrective-tests-pg17-20261010",
+        "id": "0af53e46db9b3e0eeb0f88a52e74e24c3c8a0cbc329825856ce9155ce412706a",
+        "removed": true,
+        "data_storage": "tmpfs"
+      }
+    ],
+    "checkout_volume_removed": true,
+    "removed_checkout_volumes": [
+      "glamgenius-f15-corrective-tests-checkout-20261010",
+      "glamgenius-f15-corrective-tests-final-checkout-20261010"
+    ],
+    "empty_recovery_network_removed": true,
+    "remaining_task_test_containers": 0,
+    "unrelated_postgres_preserved": true,
+    "production_access": false
+  },
+  "alembic_development_head": "o3p4q5r6s7 (head)",
+  "executed_source_and_evidence_file_sha256": {
+    ".gitattributes": {
+      "digest": "480bc200b83060cb00439d0f2022dd5c727932bdd1ff95a37287a76328e189f7"
+    },
+    "scripts/f15/safe-source-manifest.sql": {
+      "digest": "cbd0fb9f7306bbd240344950741ae14960e23a247468c96482f2e1cd092f6df9"
+    },
+    "backend/tests/test_f15_review_regressions.py": {
+      "digest": "70cba9c930a21d4bc4cdc62570a64cdbd0b6d323fa2e4d4405b2431885b90582"
+    },
+    "scripts/qualify_f15_mutants.py": {
+      "digest": "bae986bafcec0afef60a8c6146e59e02548ea66160a933d5605f7b1c51e1e659"
+    },
+    "backend/tests/test_recovery_authority_status.py": {
+      "digest": "3b99613b7851ed038da7a8057b5998d34c6d2ef9a9122eeb842e21acf5337989"
+    },
+    "docs/operations/BACKUP_RESTORE_QUALIFICATION.md": {
+      "digest": "b2891993ae250b6d5a016d96c5004797e9464f965e8df81241be2271ac98a844"
+    },
+    "docs/operations/SCALE_READINESS_AND_SLOS.md": {
+      "digest": "1ee21fa0e89778967ec36332bdc9e4d7ddac197f0ea7925f09040b1d2bb9b021"
+    },
+    "docs/operations/evidence/F15-corrective-local-boundaries-2026-10-10.json": {
+      "digest": "bc320931d53ab16bdd6743bdd2f6874369809e7b2889a0b7046943cf556fee57"
+    },
+    "docs/operations/evidence/F15-corrective-mutants-2026-10-10.json": {
+      "digest": "f73faf299325ec37b37a1a2e83585a2e7a5317a7de9e44b242f02be2af07a391"
+    },
+    "docs/operations/evidence/F15-corrective-provenance-2026-10-10.json": {
+      "digest": "0fe17aa72e391d954a2d82edeb07ae2245c5beb1fe33586ef041e5d3b0fc1034"
+    },
+    "docs/operations/evidence/F15-corrective-recovery-2026-10-10.json": {
+      "digest": "ec8a2535b0600053aad2d1d17b6490a2ccfb3a1fcd419fe47a9a807d35c763a1"
+    },
+    "docs/operations/evidence/F15-executed-corrective-2026-10-10-cluster-observer.ps1.txt": {
+      "digest": "74c6acce7b9ebf5379a7aac364f323af4e20e9d2f542ce508f8b7a5a1f0ea96b"
+    },
+    "docs/operations/evidence/F15-executed-corrective-2026-10-10-constraint-verifier.py.txt": {
+      "digest": "d8bbccf910c0851dd3adfc339a59ce8d0140a3e2de01160de919cd808b64b5af"
+    },
+    "docs/operations/evidence/F15-executed-corrective-2026-10-10-credential-safety.ps1.txt": {
+      "digest": "c16898f5cd20a1ad994b84b97d56e736918896a32ffc9129b9d3a81b1e9b9a5c"
+    },
+    "docs/operations/evidence/F15-executed-corrective-2026-10-10-dump-Dockerfile.txt": {
+      "digest": "6591b0aa555a89ac0c2a20a5aeefcfccffde66b34177d9f9964b2db98dd8cef6"
+    },
+    "docs/operations/evidence/F15-executed-corrective-2026-10-10-local-boundaries.py.txt": {
+      "digest": "42b3daa4f6eada8ad9e3be5b1d9c47dad5e67bc75a4afe47d953670ad96096d5"
+    },
+    "docs/operations/evidence/F15-executed-corrective-2026-10-10-manifest.sql.txt": {
+      "digest": "cbd0fb9f7306bbd240344950741ae14960e23a247468c96482f2e1cd092f6df9"
+    },
+    "docs/operations/evidence/F15-executed-corrective-2026-10-10-operator.ps1.txt": {
+      "digest": "59bc05d2688989931fd4bc6412fc031f765f1bdc63b2570c69c3def95766e057"
+    },
+    "docs/operations/evidence/F15-executed-corrective-2026-10-10-pinned-proxy.py.txt": {
+      "digest": "f4cfb2788b42eaf9445a164af8278ae3a076ff3c7cdc99643469211f37bc15de"
+    }
+  },
+  "incomplete_attempts_not_counted_as_passes": [
+    "Earlier partial run was stopped to include final authority evidence.",
+    "A disposable 1 GiB test tmpfs exhausted space. Its incomplete full suite is not a pass. Fresh 4 GiB clusters with bounded 128 MiB WAL completed the required suite."
+  ],
+  "test_clusters_only": {
+    "data_tmpfs_bytes_each": 4294967296,
+    "max_wal_size": "128MB",
+    "fsync": false,
+    "synchronous_commit": false,
+    "full_page_writes": false,
+    "crash_durability_qualification": false
+  },
+  "formal_finding_closure_inferred": false,
+  "exact_head_ci_authority": "Recorded after publication in the independent publication report; local tests do not substitute for that run."
+}

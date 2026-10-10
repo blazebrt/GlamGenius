@@ -1,0 +1,27 @@
+{
+  "status": "PASS",
+  "completed_at_utc": "2026-10-09T20:34:15.5612523Z",
+  "removed_containers": [
+    {
+      "name": "glamgenius-f15-corrective-tests-storea-20261010",
+      "id": "823862d2bddc6b85017fb6c8e700b61575f2c4d555732de2028d93e90e105763",
+      "removed": true,
+      "data_storage": "tmpfs"
+    },
+    {
+      "name": "glamgenius-f15-corrective-tests-pg17-20261010",
+      "id": "0af53e46db9b3e0eeb0f88a52e74e24c3c8a0cbc329825856ce9155ce412706a",
+      "removed": true,
+      "data_storage": "tmpfs"
+    }
+  ],
+  "checkout_volume_removed": true,
+  "removed_checkout_volumes": [
+    "glamgenius-f15-corrective-tests-checkout-20261010",
+    "glamgenius-f15-corrective-tests-final-checkout-20261010"
+  ],
+  "empty_recovery_network_removed": true,
+  "remaining_task_test_containers": 0,
+  "unrelated_postgres_preserved": true,
+  "production_access": false
+}

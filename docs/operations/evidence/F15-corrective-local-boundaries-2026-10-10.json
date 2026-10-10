@@ -1,0 +1,50 @@
+{
+  "status": "PASS",
+  "completed_at_utc": "2026-10-09T19:42:21.400172+00:00",
+  "production_storage_objects": 0,
+  "production_storage_object_bytes": "N/A: actual production source contained zero objects",
+  "synthetic_storage": {
+    "independent_source": {
+      "bytes": 10528,
+      "sha256": "248429efeae35b2e7fd8ae08acb4884a21ad0eb5600ef781b5f38b7c845968f7",
+      "object_identity_sha256": "50ea967fe7b1878498151c1653e5c856c487add4770d9d030ccaa65b85dc31fc"
+    },
+    "recovery_proof": {
+      "bytes": 10528,
+      "sha256": "248429efeae35b2e7fd8ae08acb4884a21ad0eb5600ef781b5f38b7c845968f7",
+      "source_bytes": 10528,
+      "source_sha256": "248429efeae35b2e7fd8ae08acb4884a21ad0eb5600ef781b5f38b7c845968f7",
+      "source_object_identity_sha256": "50ea967fe7b1878498151c1653e5c856c487add4770d9d030ccaa65b85dc31fc"
+    },
+    "exact_source_binding": true,
+    "actual_delete_restore_byte_parity": true
+  },
+  "local_store_a": {
+    "store_b_restored_cluster_authority": {
+      "status": "PASS",
+      "measured_at_utc": "2026-10-09T19:41:17.7624914Z",
+      "container": "supabase_db_glamgenius-f15-corrective-20261010",
+      "operator_phase_observed": "privacy_safe_parity_verification",
+      "credential_disposed_before_measurement": true,
+      "measurement": "Independent read-only pg_control_system query of the actual restored cluster",
+      "identity": {
+        "system_identifier": "7694754339499962405",
+        "server_version": "17.11",
+        "public_tables": 147,
+        "alembic": "d0e1f2g3h4"
+      }
+    },
+    "store_a_system_identifier": "7694755765247750161",
+    "physically_distinct_clusters": true,
+    "record_count": 2,
+    "sha256": "eb1286f2b2a7de8b65a9abb50626ffa536043275162fbbdfdbb0c7e347389501",
+    "export_destroy_recreate_import_parity": true,
+    "fetched_at": "NULL/unknown",
+    "license": "Open Database License (ODbL) v1.0",
+    "attribution": "Contains information from Open Food Facts, made available under the Open Database License (ODbL)",
+    "store_b_session_acquisition_forbidden": true,
+    "hosted_store_a_changed": false
+  },
+  "synthetic_workspace_cleanup": "TemporaryDirectory exits before report is written",
+  "synthetic_workspace_absent": true
+}

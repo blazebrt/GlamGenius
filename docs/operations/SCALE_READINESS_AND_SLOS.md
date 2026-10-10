@@ -98,9 +98,10 @@ customer impact, rollback proof, cost and owner without blame.
 **NOW:** Git proves migration upgrade/check/round-trip in disposable CI
 PostgreSQL. That is **not** a production backup or a restore drill.
 [Current recovery qualification status](BACKUP_RESTORE_QUALIFICATION.md)
-records the executed 2026-10-08 live-source dump → isolated PG17.11 restore
-and ordinary database parity, measured durations and local synthetic Storage/
-Store A recovery. F15 still requires independent closure review. Live production
+records the executed October 10 corrective live-source dump → isolated PG17.11
+restore, complete row/column parity, measured durations and local synthetic
+Storage/Store A recovery, while preserving the October 8 historical evidence.
+Formal F15 closure still depends on the audit's independent repository authority. Live production
 `d0e1f2g3h4` intentionally predates undeployed repository `o3p4q5r6s7` because
 Render auto-deploy is OFF. Vault credentials require reconnection; hosted Auth
 signing/provider configuration and existing-session validity remain separate

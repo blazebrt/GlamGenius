@@ -13,7 +13,11 @@ def test_historical_zero_byte_simulator_is_no_longer_an_executable_success_path(
 def test_recovery_authority_distinguishes_executed_live_drill_and_development_head():
     qualification = (ROOT / "docs/operations/BACKUP_RESTORE_QUALIFICATION.md").read_text(encoding="utf-8")
     durable_authority = " ".join(qualification.split())
-    assert durable_authority.count("F15 recovery qualification is complete.") == 2
+    assert durable_authority.count("F15 corrective recovery qualification is complete.") == 2
+    assert "F15 remains open pending corrective recovery qualification." not in durable_authority
+    assert "F15 OPEN — post-merge review remediation incomplete" in durable_authority
+    assert "full contents of every public table and complete column-definition parity were not measured" in durable_authority
+    assert "potentially exposed pending authorized rotation" in durable_authority
     closure_boundary = (
         "Formal finding closure is determined by repository exact-tree merge/post-merge CI authority "
         "and is recorded by the audit closure process, not inferred from this document alone."
@@ -78,8 +82,14 @@ def test_recovery_authority_distinguishes_executed_live_drill_and_development_he
     )]
     bindings += [provenance["constraint_reparse"]["evidence"], provenance["constraint_reparse"]["current_reusable_helper"],
                  provenance["cleanup"]["current_absence_evidence"]]
+    correction = json.loads((ROOT / "docs/operations/evidence/F15-review-remediation-2026-10-09.json").read_text(encoding="utf-8"))
+    preserved = correction["preserved_source_bindings"]
+    assert correction["all_seven_findings_independently_accepted"] is True
+    assert correction["fresh_production_drill_performed"] is False
+    assert correction["rotation_authorized"] is False
     for binding in bindings:
-        raw = (ROOT / binding["path"]).read_bytes()
+        historical_path = preserved.get(binding["path"], {}).get("path", binding["path"])
+        raw = (ROOT / historical_path).read_bytes()
         assert len(raw) == binding["bytes"]
         assert hashlib.sha256(raw).hexdigest() == binding["sha256"]
     assert provenance["source_manifest_helper"]["historical_bytes_match_committed"] is True
@@ -93,3 +103,36 @@ def test_recovery_authority_distinguishes_executed_live_drill_and_development_he
     assert absence["historical_dump_clients_remaining"] == 0
     assert all(process["absent"] is True for process in absence["recorded_credential_processes"])
     assert absence["production_connection_performed"] is False and absence["production_write"] is False
+
+
+def test_corrective_recovery_has_complete_independent_evidence_and_preserved_runtime_bytes():
+    evidence_root = ROOT / "docs/operations/evidence"
+    corrective = json.loads((evidence_root / "F15-corrective-recovery-2026-10-10.json").read_text())
+    assert corrective["formal_finding_closure_inferred"] is False
+    assert corrective["ordinary_database_parity"] is True
+    assert corrective["source_alembic"] == corrective["restored_alembic"] == ["d0e1f2g3h4"]
+    assert corrective["source_postgres"] == "17.6" and corrective["restored_postgres"] == "17.11"
+    assert corrective["public_table_count"] == 147
+    assert len(corrective["public_table_content_sha256"]) == len(corrective["public_table_counts"]) == 147
+    assert corrective["public_column_count"] == 1679
+    for field in ("public_columns", "public_table_content_sha256", "public_indexes", "extensions"):
+        proof = corrective["full_manifest_field_proofs"][field]
+        assert proof["equal"] is True
+        assert proof["source_before_sha256"] == proof["source_after_sha256"] == proof["restored_sha256"]
+    assert corrective["constraint_semantic_verification"]["all_canonical_definitions_equal"] is True
+    assert corrective["credential_destruction_precedes_restore"] is True
+    assert corrective["private_artifacts_removed"] is True and corrective["cleanup_failures"] == []
+    assert corrective["production_password_rotation"]["password_rotation_completed"] is True
+    assert corrective["production_password_rotation"]["new_password_read_only_authentication"]["status"] == "PASS"
+    assert corrective["production_password_rotation"]["render"]["exact_live_application_commit"] == "27f1df4a08f17321cba21b95a00a65b37ea5ce5a"
+    assert corrective["current_main_deployed"] is False and corrective["production_schema_or_data_written"] is False
+    assert corrective["vault_credential_recovery_proven"] is False and corrective["hosted_auth_authority_proven"] is False
+    assert corrective["local_store_a"]["physically_distinct_clusters"] is True
+    assert corrective["local_store_a"]["store_a_system_identifier"] != corrective["local_store_a"]["store_b_restored_cluster_authority"]["identity"]["system_identifier"]
+    assert corrective["production_storage_objects"] == 0
+    provenance = json.loads((evidence_root / "F15-corrective-provenance-2026-10-10.json").read_text())
+    assert provenance["historical_october_8_evidence_rewritten"] is False
+    for binding in provenance["executed_source_bindings"]:
+        raw = (ROOT / binding["path"]).read_bytes()
+        assert len(raw) == binding["bytes"]
+        assert hashlib.sha256(raw).hexdigest() == binding["sha256"]

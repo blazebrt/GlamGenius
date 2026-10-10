@@ -36,8 +36,6 @@ $f15CertificatePath = [IO.Path]::GetFullPath($CertificatePath)
 $f15UnusedPasswordFile = Join-Path $f15Root 'no-password-file-for-endpoint-probe'
 $f15ProgressPath = Join-Path $f15Root 'F15-Real-Drill-Progress.json'
 $f15RestoreAttempted = $false
-$f15StoreAContainer = $f15Container + '-storea'
-$f15StoreAOwned = $false
 $f15OwnDumpClients = $false
 $f15Password = $null
 $f15Plaintext = $null
@@ -53,7 +51,7 @@ $f15Evidence = [ordered]@{
     source_project_ref = 'thuyrlepavzdgkvdzuos'; source_expected_head = 'd0e1f2g3h4'
     repository_main = 'd7ba6aef68c4656d8d91c4fb6b5fc263653988e5'
     repository_expected_head = 'o3p4q5r6s7'; credential_disposed = $false; credential_received = $false
-    production_mutation = $false; artifacts = @(); canonical_command_proofs = @()
+    production_mutation = $false; artifacts = @()
 }
 
 function Write-F15Progress([string]$Phase) {
@@ -217,7 +215,7 @@ function Get-F15ComparableManifest($Manifest, [bool]$IncludeVault) {
     foreach ($f15Field in @('database','schema_context','alembic_heads','public_tables','public_table_counts',
         'auth_users','storage_buckets','storage_objects','external_integrations','off_schema_present',
         'later_label_report_resources_present','extensions','public_indexes','public_constraints','sorted_primary_id_sha256',
-        'public_columns','public_table_content_sha256','public_sequences')) {
+        'public_columns','public_table_content_sha256')) {
         $f15Comparison[$f15Field] = $Manifest.$f15Field
     }
     if ($IncludeVault) { $f15Comparison['vault_rows'] = $Manifest.vault_rows }
@@ -246,13 +244,6 @@ function Assert-F15SourceIdentity($Manifest) {
         if ($Manifest.public_tables -notcontains $f15ExpectedTable) { throw 'SOURCE_AUTHORITY_MISMATCH' }
     }
     if (@($Manifest.public_tables).Count -ne 147) { throw 'SOURCE_AUTHORITY_MISMATCH' }
-    # Windows PowerShell 5.1 emits a JSON array as one pipeline object. Assign
-    # it directly so @() does not wrap it in a second, nested array.
-    $f15ExpectedNames=Get-Content -LiteralPath (Join-Path $PSScriptRoot '../../backend/app/operations/accepted_store_b_public_tables.json') -Raw | ConvertFrom-Json
-    $f15ActualNames=@($Manifest.public_tables)
-    [Array]::Sort($f15ActualNames,[StringComparer]::Ordinal)
-    if (($f15ActualNames -join '|') -cne ($f15ExpectedNames -join '|')) { throw 'SOURCE_AUTHORITY_MISMATCH' }
-    if ($null -eq $Manifest.public_sequences -or @($Manifest.public_sequences).Count -ne 0) { throw 'SOURCE_AUTHORITY_MISMATCH' }
     if ($Manifest.storage_objects -ne 0) { throw 'NONZERO_PRODUCTION_STORAGE_REQUIRES_SEPARATE_BYTE_RECOVERY' }
 }
 
@@ -387,7 +378,7 @@ try {
     Write-F15Progress 'source_manifest_before_dump'
     Assert-F15SourceIdentity $f15Before
     $f15SafeDumpUrl = 'postgresql://postgres.thuyrlepavzdgkvdzuos@' + $SourceHost + ':5432/postgres?sslmode=verify-full'
-    $f15Proxy = Start-F15PinnedDockerProxy -Python $PythonPath -DockerPipe '\\.\pipe\dockerDesktopLinuxEngine' -Tag $f15DumpImage -Image $f15DumpImageId -SourceHost $SourceHost -SourcePort 5432 -SourceUser 'postgres.thuyrlepavzdgkvdzuos' -SourceDatabase 'postgres'
+    $f15Proxy = Start-F15PinnedDockerProxy -Python $PythonPath -DockerPipe '\\.\pipe\dockerDesktopLinuxEngine' -Tag $f15DumpImage -Image $f15DumpImageId
     $f15DumpRunToken = $f15Proxy.Token
     $f15Proxy.Process.StandardInput.WriteLine((@{password=$f15Plaintext} | ConvertTo-Json -Compress))
     $f15Proxy.Process.StandardInput.Flush()
@@ -407,14 +398,6 @@ try {
         $f15DumpResult = Invoke-F15Native -Executable $f15Cli -Arguments $f15DumpArguments -ChildEnvironment @{PGPASSWORD=$f15Plaintext; DOCKER_HOST=$f15Proxy.Host; DOCKER_CUSTOM_HEADERS=('X-F15-Run='+$f15Proxy.Token); DOCKER_CONTEXT=''; SUPABASE_USE_SLIM_IMAGES='false'; PGSSLROOTCERT=$f15CertificatePath; PGPASSFILE=$f15UnusedPasswordFile}
         $f15DumpArguments = $null
         Assert-F15NativeSuccess $f15DumpResult ('dump_'+$f15DumpName)
-        $f15CommandProofTask=$f15Proxy.Process.StandardOutput.ReadLineAsync()
-        if (-not $f15CommandProofTask.Wait(10000)) { throw 'DUMP_COMMAND_AUTHORITY_MISSING' }
-        $f15CommandProof=$f15CommandProofTask.Result | ConvertFrom-Json
-        $f15ExpectedMode=if ($f15DumpName -eq 'roles.sql') { 'roles' } elseif ($f15DumpName -eq 'data.sql') { 'data' } else { 'schema' }
-        if ($f15CommandProof.mode -cne $f15ExpectedMode -or $f15CommandProof.canonical_dump_command_verified -ne $true -or
-            $f15CommandProof.credential_present_in_container_cmd -ne $false -or $f15CommandProof.password_environment_only -ne $true -or
-            $f15CommandProof.immutable_image_verified -ne $true) { throw 'DUMP_COMMAND_AUTHORITY_MISMATCH' }
-        $f15Evidence.canonical_command_proofs=@($f15Evidence.canonical_command_proofs)+@($f15CommandProof)
         $f15ArtifactClock.Stop()
         if (-not (Test-Path -LiteralPath $f15DumpPath -PathType Leaf) -or (Get-Item -LiteralPath $f15DumpPath).Length -eq 0) { throw 'REQUIRED_DUMP_MISSING_OR_ZERO_BYTES' }
         $f15Evidence.artifacts += [ordered]@{ filename=$f15DumpName; bytes=(Get-Item -LiteralPath $f15DumpPath).Length; sha256=(Get-FileHash -LiteralPath $f15DumpPath -Algorithm SHA256).Hash.ToLowerInvariant(); start_utc=$f15ArtifactStart; finish_utc=[DateTime]::UtcNow.ToString('o'); seconds=$f15ArtifactClock.Elapsed.TotalSeconds; exit_code=0 }
@@ -475,43 +458,10 @@ try {
     $f15Evidence.vault_source_rows = $f15Before.vault_rows
     $f15Evidence.vault_restored_rows = $f15Restored.vault_rows
     $f15Evidence.production_storage_byte_recovery = 'actual production object-byte recovery: N/A — source contained zero objects'
-    Write-F15Progress 'local_store_a_and_storage_qualification'
-    # This role exists only in the isolated restored clone, after ordinary
-    # parity and after destruction of every production credential holder.
-    $f15ReaderSql="CREATE ROLE f15_recovery_identity LOGIN PASSWORD 'f15-local-only' NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS; GRANT EXECUTE ON FUNCTION pg_catalog.pg_control_system() TO f15_recovery_identity; GRANT USAGE ON SCHEMA public TO f15_recovery_identity; GRANT SELECT ON public.alembic_version TO f15_recovery_identity; REVOKE CREATE,TEMP ON DATABASE postgres FROM PUBLIC;"
-    Assert-F15NativeSuccess (Invoke-F15Native $f15Docker @('exec',$f15Container,'psql','-U','supabase_admin','-d','postgres','-X','-q','-v','ON_ERROR_STOP=1','-c',$f15ReaderSql)) 'local_identity_reader_setup'
-    $f15StoreAStart='initdb -D /f15-pgdata -U postgres --auth=trust >/tmp/f15-init.log && exec postgres -D /f15-pgdata -p 5433 -h 127.0.0.1'
-    $f15StoreAResult=Invoke-F15Native $f15Docker @('run','-d','--name',$f15StoreAContainer,'--label',('glamgenius.f15.local.boundary='+$f15Container),'--network',('container:'+$f15Container),'--user','postgres','--tmpfs','/f15-pgdata:rw,mode=0700,uid=100,gid=101,size=268435456','--entrypoint','bash',$f15Image,'-c',$f15StoreAStart)
-    Assert-F15NativeSuccess $f15StoreAResult 'local_store_a_start'
-    $f15StoreAOwned=$true
-    $f15StoreAReady=$false
-    for($f15Wait=0;$f15Wait -lt 30;$f15Wait++) {
-        $f15ReadyResult=Invoke-F15Native $f15Docker @('exec',$f15StoreAContainer,'pg_isready','-U','postgres','-p','5433')
-        if ($f15ReadyResult.ExitCode -eq 0) { $f15StoreAReady=$true; break }
-        Start-Sleep -Milliseconds 500
-    }
-    if (-not $f15StoreAReady) { throw 'LOCAL_STORE_A_START_TIMEOUT' }
-    $f15BoundaryImage='sha256:2660ef035468b365b050ade58eaa9bba51e0deca5f038e72bacfd60960e83fdf'
-    $f15BoundaryRepo=[IO.Path]::GetFullPath((Join-Path $PSScriptRoot '../..'))
-    $f15BoundaryArguments=@('run','--rm','--name',($f15Container+'-boundary'),'--label',('glamgenius.f15.local.boundary='+$f15Container),'--network',('container:'+$f15Container),'--mount',('type=bind,source='+$f15BoundaryRepo+',target=/source,readonly'),'--mount',('type=bind,source='+$f15Root+',target=/reports'),
-        '-e','POSTGRES_URL=postgresql+asyncpg://f15_recovery_identity:f15-local-only@localhost:5432/postgres',
-        '-e','F15_LOCAL_RESTORED_STORE_B_URL=postgresql+asyncpg://f15_recovery_identity:f15-local-only@localhost:5432/postgres',
-        '-e','OFF_DATABASE_URL=postgresql+asyncpg://postgres:synthetic@localhost:5433/postgres',
-        '-e','APP_ENV=test','-e','SUPABASE_URL=https://ci-project.supabase.co','-e','SUPABASE_ANON_KEY=ci-anon-key-not-a-real-one',
-        '-e','SUPABASE_SERVICE_ROLE_KEY=ci-service-role-key-not-a-real-one','-e','SUPABASE_JWT_ISSUER=https://ci-project.supabase.co/auth/v1',
-        '-e','SUPABASE_JWKS_URL=https://ci-project.supabase.co/auth/v1/.well-known/jwks.json','-e','SUPABASE_STORAGE_BUCKET=glamgenius-media',
-        '-e','SUPABASE_ADMIN_USER_IDS=00000000-0000-0000-0000-000000000001','-e','MEDIA_STORAGE_BACKEND=local','-e','MEDIA_LOCAL_ROOT=/tmp/f15-local-media',
-        '-e','INVITE_REQUIRED=false','-e','PYTHONPATH=/source/backend','--entrypoint','python',$f15BoundaryImage,'/source/scripts/f15/qualify-local-boundaries.py')
-    $f15BoundaryResult=Invoke-F15Native $f15Docker $f15BoundaryArguments
-    Assert-F15NativeSuccess $f15BoundaryResult 'local_store_a_and_storage_qualification'
-    $f15BoundaryEvidence=Get-Content -LiteralPath (Join-Path $f15Root 'Local-Boundary-Qualification.json') -Raw | ConvertFrom-Json
-    if ($f15BoundaryEvidence.status -cne 'PASS' -or $f15BoundaryEvidence.local_store_a.local_store_b_lookup_read_only -ne $true -or
-        $f15BoundaryEvidence.local_store_a.physically_distinct_clusters -ne $true -or $f15BoundaryEvidence.synthetic_workspace_absent -ne $true) { throw 'LOCAL_BOUNDARY_QUALIFICATION_FAILED' }
-    $f15Evidence.local_boundary_qualification=$f15BoundaryEvidence
     $f15Evidence.status = 'REAL_STORE_B_PARITY_PASSED_REMAINING_F15_QUALIFICATION_REQUIRED'
     Write-F15Progress 'real_store_b_parity_passed'
     Write-Host 'Real Store B backup, local restore and ordinary database parity passed.' -ForegroundColor Green
-    Write-Host 'Local Store A and synthetic Storage recovery passed. F15 remains OPEN pending repository validation, exact-head review and merge authority.'
+    Write-Host 'F15 remains OPEN pending Storage-byte, Store A, harness, mutation and repository validation.'
 } catch {
     $f15Evidence.status = 'F15_OPEN_REAL_QUALIFICATION_INCOMPLETE'
     $f15Evidence.error_code = 'FAIL_CLOSED_' + $f15Evidence.phase
@@ -538,23 +488,9 @@ try {
             Clear-F15OwnedDumpClients
           }
           local_container = {
-            $f15LocalCleanupFailures=0
-            if ($f15StoreAOwned) {
-                try {
-                    $f15BoundaryIds=Invoke-F15Native $f15Docker @('ps','-aq','--filter',('label=glamgenius.f15.local.boundary='+$f15Container),'--filter',('name=^/'+$f15Container+'-boundary$'))
-                    Assert-F15NativeSuccess $f15BoundaryIds 'local_boundary_client_inventory'
-                    foreach($f15BoundaryId in ($f15BoundaryIds.Output -split "`r?`n" | Where-Object {$_ -match '^[a-f0-9]{12,64}$'})) {
-                        Assert-F15NativeSuccess (Invoke-F15Native $f15Docker @('rm','-f',$f15BoundaryId) -TimeoutSeconds 30) 'local_boundary_client_cleanup'
-                    }
-                } catch { $f15LocalCleanupFailures++ }
-                try { Assert-F15NativeSuccess (Invoke-F15Native $f15Docker @('rm','-f',$f15StoreAContainer) -TimeoutSeconds 30) 'local_store_a_cleanup' }
-                catch { $f15LocalCleanupFailures++ }
-            }
             if ($f15RestoreAttempted) {
-                try { Assert-F15NativeSuccess (Invoke-F15Native $f15Docker @('rm','-f',$f15Container) -TimeoutSeconds 30) 'local_copy_cleanup' }
-                catch { $f15LocalCleanupFailures++ }
+                Assert-F15NativeSuccess (Invoke-F15Native $f15Docker @('rm','-f',$f15Container) -TimeoutSeconds 30) 'local_copy_cleanup'
             }
-            if ($f15LocalCleanupFailures) { throw 'LOCAL_CONTAINER_CLEANUP_FAILED' }
           }
           local_volume = {
             if ($f15RestoreAttempted) { Assert-F15NativeSuccess (Invoke-F15Native $f15Docker @('volume','rm',$f15Container) -TimeoutSeconds 30) 'local_volume_cleanup' }
